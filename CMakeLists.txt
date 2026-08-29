@@ -50,6 +50,7 @@ set(WQS_SRC
     src/navmesh_builder/navmesh_file.cpp
     src/navmesh_builder/navmesh_builder.cpp
     src/pathfinder/pathfinder.cpp
+    src/road_network/road_network.cpp
     src/query_server/json_protocol.cpp
     src/query_server/query_server.cpp
 )

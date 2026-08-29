@@ -102,7 +102,8 @@ from the walkable mesh (don’t place those models, or strip them before bake).
 
 # Production-shaped
 ./build/world-query-service --cadb scriptfiles/colandreas/ColAndreas.cadb \
-    --navmesh data/sa.navmesh --bind 0.0.0.0 --port 8090 --threads 4
+    --navmesh data/sa.navmesh --roads data/GPS.dat \
+    --bind 0.0.0.0 --port 8090 --threads 4
 ```
 
 ## Protocol
@@ -133,6 +134,21 @@ requests on that socket run on a thread pool.
 waypoints lead only part of the way (Detour partial result). Treat it as
 "no route", not as a route.
 
+**vehicle path** (road network, requires `--roads`)
+```json
+{"type":"find_vehicle_path","id":"req-5","from":[x,y,z],"to":[x,y,z]}
+{"type":"find_vehicle_path_result","id":"req-5","success":true,"waypoints":[[x,y,z],...]}
+```
+Waypoints are traffic-node positions (road centrelines) and the first/last are
+the nodes nearest to from/to - endpoints may sit tens of units from the exact
+positions. Combine with `find_path` (navmesh) for the on-foot legs.
+
+**nearest road node** (requires `--roads`)
+```json
+{"type":"nearest_node","id":"req-6","pos":[x,y,z]}
+{"type":"nearest_node_result","id":"req-6","found":true,"node":4653,"pos":[x,y,z]}
+```
+
 **move along surface**
 ```json
 {"type":"move_along_surface","id":"req-4","from":[x,y,z],"delta":[dx,dy,dz]}
@@ -152,6 +168,17 @@ See LICENSE for GPL implications if you later vendor ColAndreas code.
 
 `.col` files are model-local. World assembly needs IPL placements — that is
 what CADB already contains.
+
+## Road network (GPS.dat)
+
+`--roads data/GPS.dat` loads the GTA SA traffic node graph - the road network
+the game's vehicle AI drives on (~27.6k nodes, one connected component
+covering every drivable road including the inter-city bridges). The file is
+the GPS.dat format distributed with the samp-gps plugin releases (the file
+format only; the loader here is original). The graph is the routing backend
+for vehicles; the navmesh remains the backend for pedestrians. A full
+LS -> San Fierro vehicle route (~7000 world units, 551 nodes) computes in
+~40 ms.
 
 ## What this is not
 

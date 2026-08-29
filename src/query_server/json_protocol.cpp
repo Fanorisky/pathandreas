@@ -27,7 +27,8 @@ json errorResp(const json& id, const std::string& msg) {
 
 std::string HandleQueryJson(const std::string& request,
                             const CollisionWorld* world,
-                            const Pathfinder* pathfinder) {
+                            const Pathfinder* pathfinder,
+                            const RoadNetwork* roads) {
     json req;
     try {
         req = json::parse(request);
@@ -98,9 +99,39 @@ std::string HandleQueryJson(const std::string& request,
         return json{{"type", "move_along_surface_result"}, {"id", id}, {"position", vecArr(pos)}}.dump();
     }
 
+    if (type == "find_vehicle_path") {
+        if (!roads || !roads->ready())
+            return errorResp(id, "road network not loaded").dump();
+        Vec3 from, to;
+        if (!parseVec(req["from"], from, err) || !parseVec(req["to"], to, err))
+            return errorResp(id, err).dump();
+        RoadNetwork::RouteResult r = roads->findPath(from, to);
+        json wps = json::array();
+        for (const auto& v : r.waypoints) wps.push_back(vecArr(v));
+        return json{{"type", "find_vehicle_path_result"}, {"id", id},
+                    {"success", r.success}, {"waypoints", wps}}.dump();
+    }
+
+    if (type == "nearest_node") {
+        if (!roads || !roads->ready())
+            return errorResp(id, "road network not loaded").dump();
+        Vec3 pos;
+        if (!parseVec(req["pos"], pos, err))
+            return errorResp(id, err).dump();
+        const long node = roads->nearestNode(pos);
+        const bool found = node >= 0;
+        json resp = {{"type", "nearest_node_result"}, {"id", id}, {"found", found}};
+        if (found) {
+            resp["node"] = node;
+            resp["pos"] = vecArr(roads->nodePos(node));
+        }
+        return resp.dump();
+    }
+
     if (type == "status") {
         json resp = {{"type", "status_result"}, {"id", id}};
         resp["collision"] = world && !world->empty();
+        resp["roads"] = roads && roads->ready();
         resp["navmesh"] = pathfinder && pathfinder->ready();
         if (world && !world->empty()) {
             resp["triangles"] = world->triangleCount();

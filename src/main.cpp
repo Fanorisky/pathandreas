@@ -2,6 +2,7 @@
 #include "collision_world/collision_world.h"
 #include "navmesh_builder/navmesh_builder.h"
 #include "pathfinder/pathfinder.h"
+#include "road_network/road_network.h"
 #include "query_server/query_server.h"
 #include "common/log.h"
 
@@ -21,6 +22,7 @@ static void usage() {
         "  --col PATH           Load raw GTA SA .col (model-local)\n"
         "  --mesh-test-city     Use the built-in synthetic city (no GTA data)\n"
         "  --navmesh PATH       Load a previously built .navmesh (WQS1)\n"
+        "  --roads PATH         Load the vehicle road network (GPS.dat format)\n"
         "  --build-navmesh PATH Build navmesh from the loaded collision mesh and save\n"
         "  --tile-size N        Navmesh tile size in world units (default 128)\n"
         "  --threads N          Query pool AND navmesh bake threads (default hardware)\n"
@@ -31,7 +33,7 @@ static void usage() {
 }
 
 int main(int argc, char** argv) {
-    std::string cadb, col, navmeshIn, navmeshOut;
+    std::string cadb, col, navmeshIn, navmeshOut, roadsFile;
     bool testCity = false;
     ServerConfig scfg;
     NavBuildConfig ncfg;
@@ -53,6 +55,8 @@ int main(int argc, char** argv) {
             testCity = true;
         } else if (!std::strcmp(argv[i], "--navmesh")) {
             if (!next(navmeshIn)) { usage(); return 2; }
+        } else if (!std::strcmp(argv[i], "--roads")) {
+            if (!next(roadsFile)) { usage(); return 2; }
         } else if (!std::strcmp(argv[i], "--build-navmesh")) {
             if (!next(navmeshOut)) { usage(); return 2; }
         } else if (!std::strcmp(argv[i], "--tile-size")) {
@@ -121,6 +125,15 @@ int main(int argc, char** argv) {
         }
     }
 
-    QueryServer server(&world, &pathfinder, scfg);
+    RoadNetwork roads;
+    if (!roadsFile.empty()) {
+        std::string err;
+        if (!roads.loadFile(roadsFile, err)) {
+            WQS_ERROR("road network: %s", err.c_str());
+            return 1;
+        }
+    }
+
+    QueryServer server(&world, &pathfinder, scfg, &roads);
     return server.run();
 }
