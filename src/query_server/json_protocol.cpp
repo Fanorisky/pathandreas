@@ -30,7 +30,8 @@ json errorResp(const json& id, const std::string& msg) {
 std::string HandleQueryJson(const std::string& request,
                             const CollisionWorld* world,
                             const Pathfinder* pathfinder,
-                            const RoadNetwork* roads) {
+                            const RoadNetwork* roads,
+                            const Pathfinder* vehiclePathfinder) {
     json req;
     try {
         req = json::parse(request);
@@ -101,6 +102,22 @@ std::string HandleQueryJson(const std::string& request,
         return json{{"type", "move_along_surface_result"}, {"id", id}, {"position", vecArr(pos)}}.dump();
     }
 
+    if (type == "find_offroad_path") {
+        if (!vehiclePathfinder || !vehiclePathfinder->ready())
+            return errorResp(id, "vehicle navmesh not loaded").dump();
+        Vec3 from, to;
+        if (!parseVec(req["from"], from, err) || !parseVec(req["to"], to, err))
+            return errorResp(id, err).dump();
+        // Car-agent navmesh routing for trips that never touch a road
+        // (beach to beach, across open desert).
+        PathResult p = vehiclePathfinder->FindPath(from, to, world);
+        json wps = json::array();
+        for (const auto& v : p.waypoints) wps.push_back(vecArr(v));
+        return json{{"type", "find_offroad_path_result"}, {"id", id},
+                    {"success", p.success}, {"partial", p.partial},
+                    {"waypoints", wps}}.dump();
+    }
+
     if (type == "find_hybrid_path") {
         if (!roads || !roads->ready())
             return errorResp(id, "road network not loaded").dump();
@@ -134,12 +151,44 @@ std::string HandleQueryJson(const std::string& request,
         const Vec3& lastNode = r.waypoints.back();
         RoutePlanner::OffroadLeg legStart = RoutePlanner::CheckOffroadLeg(world, from, firstNode);
         RoutePlanner::OffroadLeg legGoal = RoutePlanner::CheckOffroadLeg(world, lastNode, to);
+
+        // A straight off-road leg that the ground check rejects can often
+        // still be driven - just not in a line. When a car-agent navmesh is
+        // loaded, route such legs on it and splice the waypoints in, so the
+        // returned route stays drivable end to end instead of asking the
+        // consumer to cross country blind. Returns an empty vector when the
+        // leg stays a straight line (drivable, no mesh, or no mesh route).
+        auto spliceLeg = [&](const Vec3& a, const Vec3& b,
+                             const RoutePlanner::OffroadLeg& straight) {
+            std::vector<Vec3> none;
+            if (straight.drivable || !vehiclePathfinder || !vehiclePathfinder->ready())
+                return none;
+            PathResult leg = vehiclePathfinder->FindPath(a, b, world);
+            if (leg.success && !leg.partial && !leg.waypoints.empty())
+                return leg.waypoints; // drivable detour through the car mesh
+            return none;
+        };
+        const std::vector<Vec3> startLeg = spliceLeg(from, firstNode, legStart);
+        const std::vector<Vec3> goalLeg = spliceLeg(lastNode, to, legGoal);
+        const bool startRouted = !startLeg.empty();
+        const bool goalRouted = !goalLeg.empty();
+
         json wps = json::array();
-        if ((from - firstNode).lengthSq() > 4.f) wps.push_back(vecArr(from));
-        for (const auto& v : r.waypoints) wps.push_back(vecArr(v));
-        if ((to - lastNode).lengthSq() > 4.f) wps.push_back(vecArr(to));
-        json legS = {{"distance", legStart.distance}, {"drivable", legStart.drivable}};
-        json legG = {{"distance", legGoal.distance}, {"drivable", legGoal.drivable}};
+        // Straight legs carry the exact endpoints; mesh legs already start and
+        // end on snapped positions adjacent to the node route, so the boundary
+        // nodes are skipped to avoid duplicates.
+        if (!startRouted && (from - firstNode).lengthSq() > 4.f) wps.push_back(vecArr(from));
+        for (const auto& v : startLeg) wps.push_back(vecArr(v));
+        for (size_t i = startRouted ? 1 : 0;
+             i < r.waypoints.size() - (goalRouted ? 1 : 0); ++i)
+            wps.push_back(vecArr(r.waypoints[i]));
+        for (const auto& v : goalLeg) wps.push_back(vecArr(v));
+        if (!goalRouted && (to - lastNode).lengthSq() > 4.f) wps.push_back(vecArr(to));
+
+        json legS = {{"distance", legStart.distance}, {"drivable", legStart.drivable},
+                     {"routed", startRouted ? "mesh" : "straight"}};
+        json legG = {{"distance", legGoal.distance}, {"drivable", legGoal.drivable},
+                     {"routed", goalRouted ? "mesh" : "straight"}};
         return json{{"type", "find_vehicle_path_result"}, {"id", id},
                     {"success", r.success}, {"waypoints", wps},
                     {"offroad_start", legS}, {"offroad_goal", legG}}.dump();

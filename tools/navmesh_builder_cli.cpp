@@ -15,7 +15,7 @@ static void usage() {
         "Usage:\n"
         "  navmesh_builder --out FILE.navmesh [--cadb FILE | --col FILE | --test-city]\n"
         "                  [--tile-size 128] [--cs 0.3] [--ch 0.2] [--threads N]\n"
-        "                  [--radius 0.6] [--slope 45]\n"
+        "                  [--radius 0.6] [--slope 45] [--agent-height 2.0] [--agent-climb 0.9]\n"
         "                  [--region X1,Y1,X2,Y2]  bake only this AABB (GTA coords)\n");
 }
 
@@ -62,6 +62,12 @@ int main(int argc, char** argv) {
         } else if (!std::strcmp(argv[i], "--radius")) {
             std::string v; if (!next(v)) return 2;
             cfg.agentRadius = std::strtof(v.c_str(), nullptr);
+        } else if (!std::strcmp(argv[i], "--agent-height")) {
+            std::string v; if (!next(v)) return 2;
+            cfg.agentHeight = std::strtof(v.c_str(), nullptr);
+        } else if (!std::strcmp(argv[i], "--agent-climb")) {
+            std::string v; if (!next(v)) return 2;
+            cfg.agentClimb = std::strtof(v.c_str(), nullptr);
         } else if (!std::strcmp(argv[i], "--slope")) {
             std::string v; if (!next(v)) return 2;
             cfg.walkableSlopeAngle = std::strtof(v.c_str(), nullptr);

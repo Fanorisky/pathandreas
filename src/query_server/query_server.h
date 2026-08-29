@@ -19,7 +19,7 @@ struct ServerConfig {
 class QueryServer {
 public:
     QueryServer(CollisionWorld* world, Pathfinder* pathfinder, const ServerConfig& cfg,
-                RoadNetwork* roads = nullptr);
+                RoadNetwork* roads = nullptr, Pathfinder* vehiclePathfinder = nullptr);
     ~QueryServer();
 
     // Blocking serve loop. Returns after stop().
@@ -30,6 +30,7 @@ private:
     CollisionWorld* world_;
     Pathfinder* pathfinder_;
     RoadNetwork* roads_;
+    Pathfinder* vehiclePathfinder_;
     ServerConfig cfg_;
     std::atomic<bool> running_{false};
     int listenFd_ = -1;

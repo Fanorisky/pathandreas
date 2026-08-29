@@ -22,6 +22,7 @@ static void usage() {
         "  --col PATH           Load raw GTA SA .col (model-local)\n"
         "  --mesh-test-city     Use the built-in synthetic city (no GTA data)\n"
         "  --navmesh PATH       Load a previously built .navmesh (WQS1)\n"
+        "  --navmesh-vehicle P  Load a car-agent navmesh for offroad legs\n"
         "  --roads PATH         Load the vehicle road network (GPS.dat format)\n"
         "  --build-navmesh PATH Build navmesh from the loaded collision mesh and save\n"
         "  --tile-size N        Navmesh tile size in world units (default 128)\n"
@@ -33,7 +34,7 @@ static void usage() {
 }
 
 int main(int argc, char** argv) {
-    std::string cadb, col, navmeshIn, navmeshOut, roadsFile;
+    std::string cadb, col, navmeshIn, navmeshOut, roadsFile, navmeshVehicleIn;
     bool testCity = false;
     ServerConfig scfg;
     NavBuildConfig ncfg;
@@ -55,6 +56,8 @@ int main(int argc, char** argv) {
             testCity = true;
         } else if (!std::strcmp(argv[i], "--navmesh")) {
             if (!next(navmeshIn)) { usage(); return 2; }
+        } else if (!std::strcmp(argv[i], "--navmesh-vehicle")) {
+            if (!next(navmeshVehicleIn)) { usage(); return 2; }
         } else if (!std::strcmp(argv[i], "--roads")) {
             if (!next(roadsFile)) { usage(); return 2; }
         } else if (!std::strcmp(argv[i], "--build-navmesh")) {
@@ -134,6 +137,18 @@ int main(int argc, char** argv) {
         }
     }
 
-    QueryServer server(&world, &pathfinder, scfg, &roads);
+    // Optional car-agent navmesh (larger radius, low climb, shallow slopes):
+    // the routing backend for vehicle off-road legs and pure off-road trips.
+    Pathfinder vehiclePathfinder;
+    if (!navmeshVehicleIn.empty()) {
+        std::string err;
+        if (!vehiclePathfinder.loadFile(navmeshVehicleIn, err)) {
+            WQS_ERROR("vehicle navmesh load: %s", err.c_str());
+            return 1;
+        }
+    }
+
+    QueryServer server(&world, &pathfinder, scfg, &roads,
+                       navmeshVehicleIn.empty() ? nullptr : &vehiclePathfinder);
     return server.run();
 }

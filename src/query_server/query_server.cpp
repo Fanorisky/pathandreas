@@ -123,7 +123,7 @@ std::string wsDecode(std::string& buf, bool& closed, bool& needMore, bool& isPin
 }
 
 void handleClient(int fd, CollisionWorld* world, Pathfinder* pathfinder,
-                   RoadNetwork* roads, ThreadPool& pool) {
+                   RoadNetwork* roads, Pathfinder* vehiclePathfinder, ThreadPool& pool) {
     struct Conn {
         int fd = -1;
         std::mutex writeMu;
@@ -183,7 +183,7 @@ void handleClient(int fd, CollisionWorld* world, Pathfinder* pathfinder,
             } else {
                 std::string body, ctype = "text/plain; charset=utf-8";
                 if (headers.rfind("GET /health", 0) == 0 || headers.rfind("GET /health ", 0) == 0) {
-                    body = HandleQueryJson("{\"type\":\"status\",\"id\":\"health\"}", world, pathfinder, roads);
+                    body = HandleQueryJson("{\"type\":\"status\",\"id\":\"health\"}", world, pathfinder, roads, vehiclePathfinder);
                     ctype = "application/json";
                 } else if (headers.rfind("POST /query", 0) == 0 || headers.rfind("POST /query ", 0) == 0) {
                     // The body may not have arrived yet when the headers are complete -
@@ -209,7 +209,7 @@ void handleClient(int fd, CollisionWorld* world, Pathfinder* pathfinder,
                         buf.append(tmp, static_cast<size_t>(n));
                     }
                     if (buf.size() > want) buf.resize(want);
-                    body = HandleQueryJson(buf, world, pathfinder, roads);
+                    body = HandleQueryJson(buf, world, pathfinder, roads, vehiclePathfinder);
                     ctype = "application/json";
                     buf.clear();
                 } else {
@@ -243,8 +243,8 @@ void handleClient(int fd, CollisionWorld* world, Pathfinder* pathfinder,
                 }
                 if (payload.empty()) continue;
                 conn->inflight.fetch_add(1);
-                pool.submit([payload, world, pathfinder, roads, conn] {
-                    std::string resp = HandleQueryJson(payload, world, pathfinder, roads);
+                pool.submit([payload, world, pathfinder, roads, vehiclePathfinder, conn] {
+                    std::string resp = HandleQueryJson(payload, world, pathfinder, roads, vehiclePathfinder);
                     conn->writeRaw(wsFrame(resp, 0x1));
                     conn->inflight.fetch_sub(1);
                 });
@@ -263,8 +263,9 @@ done:
 } // namespace
 
 QueryServer::QueryServer(CollisionWorld* world, Pathfinder* pathfinder, const ServerConfig& cfg,
-                         RoadNetwork* roads)
-    : world_(world), pathfinder_(pathfinder), roads_(roads), cfg_(cfg) {}
+                         RoadNetwork* roads, Pathfinder* vehiclePathfinder)
+    : world_(world), pathfinder_(pathfinder), roads_(roads),
+      vehiclePathfinder_(vehiclePathfinder), cfg_(cfg) {}
 
 QueryServer::~QueryServer() { stop(); }
 
@@ -325,7 +326,7 @@ int QueryServer::run() {
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
         // Connection I/O lives on its own thread so the query pool never blocks on recv.
         std::thread([fd, this, &pool] {
-            handleClient(fd, world_, pathfinder_, roads_, pool);
+            handleClient(fd, world_, pathfinder_, roads_, vehiclePathfinder_, pool);
         }).detach();
     }
     return 0;

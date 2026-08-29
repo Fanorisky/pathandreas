@@ -103,6 +103,7 @@ from the walkable mesh (don’t place those models, or strip them before bake).
 # Production-shaped
 ./build/world-query-service --cadb scriptfiles/colandreas/ColAndreas.cadb \
     --navmesh data/sa.navmesh --roads data/GPS.dat \
+    --navmesh-vehicle data/gta_vehicle.navmesh \
     --bind 0.0.0.0 --port 8090 --threads 4
 ```
 
@@ -165,8 +166,20 @@ slopes are the exceptions), but the legs from the endpoints to their nearest
 nodes are straight lines the graph knows nothing about - the offroad_start /
 offroad_goal objects report each leg's length and a coarse drivability check
 (ground sampled every ~5 units; no ground or height steps over ~31 degrees
-fail it). `drivable: false` means a car cannot simply drive that line: handle
-it yourself (crawl with raycasts, pick another node, refuse the job).
+fail it). `drivable: false` means a car cannot simply drive that line. With
+`--navmesh-vehicle` (a second navmesh baked with car-agent parameters -
+`--radius 1.5 --agent-height 2.5 --agent-climb 0.5 --slope 30 --cs 0.4`)
+such legs are routed on that mesh instead and the waypoints are spliced
+into the route: `routed: "mesh"`. `routed: "straight"` keeps the plain
+line - either it was drivable, or no car-mesh route exists either.
+
+**pure off-road path** (requires `--navmesh-vehicle`)
+```json
+{"type":"find_offroad_path","id":"req-7","from":[x,y,z],"to":[x,y,z]}
+{"type":"find_offroad_path_result","id":"req-7","success":true,"partial":false,"waypoints":[[x,y,z],...]}
+```
+Car-mesh routing for trips that never touch a road (beach to beach,
+across open desert).
 
 **nearest road node** (requires `--roads`)
 ```json
@@ -193,6 +206,10 @@ See LICENSE for GPL implications if you later vendor ColAndreas code.
 
 `.col` files are model-local. World assembly needs IPL placements — that is
 what CADB already contains.
+
+Bakes drop triangles fully below z -1.5: the GTA sea floor is collision
+geometry, flat enough to rasterize as perfectly walkable, and without the
+filter NPCs route - and walk - underwater on both meshes.
 
 ## Road network (GPS.dat)
 

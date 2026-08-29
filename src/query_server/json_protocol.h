@@ -12,6 +12,7 @@ namespace wqs {
 std::string HandleQueryJson(const std::string& request,
                             const CollisionWorld* world,
                             const Pathfinder* pathfinder,
-                            const RoadNetwork* roads = nullptr);
+                            const RoadNetwork* roads = nullptr,
+                            const Pathfinder* vehiclePathfinder = nullptr);
 
 } // namespace wqs
