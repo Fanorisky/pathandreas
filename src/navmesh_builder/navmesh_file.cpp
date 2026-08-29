@@ -9,6 +9,21 @@
 
 namespace wqs {
 
+namespace {
+// WQS1 format versions. Detour tile blobs reserve link space sized by
+// sizeof(dtLink), which differs between 32-bit and 64-bit polygon-reference
+// builds (DT_POLYREF64), so a navmesh is only loadable by a binary built
+// with the same flag. The version records which one produced the file:
+//   1 = 32-bit poly refs (pre-DT_POLYREF64 builds)
+//   2 = 64-bit poly refs (current builds)
+// and LoadNavMesh rejects a mismatch loudly instead of misparsing the blob.
+#ifdef DT_POLYREF64
+constexpr uint32_t kCurrentVersion = 2;
+#else
+constexpr uint32_t kCurrentVersion = 1;
+#endif
+} // namespace
+
 bool SaveNavMesh(const std::string& path, const dtNavMesh* mesh, std::string& err) {
     if (!mesh) {
         err = "null navmesh";
@@ -21,7 +36,7 @@ bool SaveNavMesh(const std::string& path, const dtNavMesh* mesh, std::string& er
     }
     const dtNavMeshParams* params = mesh->getParams();
     out.write("WQS1", 4);
-    uint32_t version = 1;
+    uint32_t version = kCurrentVersion;
     out.write(reinterpret_cast<const char*>(&version), 4);
     out.write(reinterpret_cast<const char*>(params), sizeof(dtNavMeshParams));
 
@@ -66,8 +81,14 @@ dtNavMesh* LoadNavMesh(const std::string& path, std::string& err) {
     }
     uint32_t version = 0;
     in.read(reinterpret_cast<char*>(&version), 4);
-    if (version != 1) {
-        err = "unsupported navmesh version";
+    if (version != kCurrentVersion) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf),
+                      "navmesh version %u does not match this build (%u): the file was "
+                      "baked with %s poly refs - re-bake it with the current binary",
+                      version, kCurrentVersion,
+                      version == 2 ? "64-bit" : "32-bit");
+        err = buf;
         return nullptr;
     }
     dtNavMeshParams params{};
