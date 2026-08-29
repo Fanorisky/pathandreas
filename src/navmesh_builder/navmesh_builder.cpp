@@ -113,6 +113,25 @@ TileResult buildTile(rcContext* ctx, const RecastVerts& rv, const NavBuildConfig
         if (tmax[0] < cfg.bmin[0] || tmin[0] > cfg.bmax[0]) continue;
         if (tmax[1] < cfg.bmin[1] || tmin[1] > cfg.bmax[1]) continue;
         if (tmax[2] < cfg.bmin[2] || tmin[2] > cfg.bmax[2]) continue;
+        // CADB contains stray geometry the game never places on screen: whole
+        // duplicate surface layers floating at z 800-1200 (~6.5k walkable polys
+        // per full-map bake), and misplaced slabs far outside the +-3000 map
+        // bounds. Nothing legitimate is above Mount Chiliad's ~500 or beyond
+        // the map. Rasterized, they become phantom walkable islands that show
+        // up as connected components and can even snap a query. Drop them.
+        // The bounds check is per-vertex, not per-triangle-bbox, so enormous
+        // triangles that merely stretch out of the map are caught too.
+        // (rv is Recast Y-up: rv.y = GTA z, rv.z = -GTA y.)
+        {
+            bool stray = false;
+            for (int k = 0; k < 3 && !stray; ++k) {
+                const float* v[3] = {&rv.verts[ia], &rv.verts[ib], &rv.verts[ic]};
+                if (v[k][1] > 600.0f) stray = true;                       // above the world
+                if (std::fabs(v[k][0]) > 3500.0f) stray = true;           // outside map x
+                if (std::fabs(v[k][2]) > 3500.0f) stray = true;           // outside map y
+            }
+            if (stray) continue;
+        }
         tileTris.push_back(rv.tris[i * 3 + 0]);
         tileTris.push_back(rv.tris[i * 3 + 1]);
         tileTris.push_back(rv.tris[i * 3 + 2]);
