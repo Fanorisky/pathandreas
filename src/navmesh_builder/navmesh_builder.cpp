@@ -124,13 +124,20 @@ TileResult buildTile(rcContext* ctx, const RecastVerts& rv, const NavBuildConfig
         // (rv is Recast Y-up: rv.y = GTA z, rv.z = -GTA y.)
         {
             bool stray = false;
+            int belowSea = 0;
             for (int k = 0; k < 3 && !stray; ++k) {
                 const float* v[3] = {&rv.verts[ia], &rv.verts[ib], &rv.verts[ic]};
                 if (v[k][1] > 600.0f) stray = true;                       // above the world
                 if (std::fabs(v[k][0]) > 3500.0f) stray = true;           // outside map x
                 if (std::fabs(v[k][2]) > 3500.0f) stray = true;           // outside map y
+                if (v[k][1] < -1.5f) ++belowSea;                          // rv.y = GTA z
             }
-            if (stray) continue;
+            // The sea floor is collision geometry too, and it is flat enough
+            // to rasterize as perfectly walkable - without this filter the
+            // navmesh spreads across the ocean and NPCs happily route (and
+            // walk) underwater. Triangles fully below sea level (GTA water
+            // plane is z=0; -1.5 keeps sloped shoreline) are the sea bed.
+            if (stray || belowSea == 3) continue;
         }
         tileTris.push_back(rv.tris[i * 3 + 0]);
         tileTris.push_back(rv.tris[i * 3 + 1]);
