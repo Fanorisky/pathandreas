@@ -128,6 +128,11 @@ PathResult Pathfinder::FindPath(const Vec3& startPos, const Vec3& endPos, const 
     dtStatus st = slot->q->findPath(startRef, endRef, sn, en, &slot->filter,
                                     polys, &npolys, kMaxPolys);
     if (dtStatusFailed(st) || npolys == 0) return out;
+    // DT_PARTIAL_RESULT means the goal polygon was never reached (disconnected
+    // navmesh or node budget exhausted): Detour returns the best path toward
+    // it. Surface that to the caller - a consumer that walks the waypoints
+    // blindly would stop mid-route with no idea the route is incomplete.
+    out.partial = (st & DT_PARTIAL_RESULT) != 0;
 
     float straight[kMaxStraight * 3];
     unsigned char flags[kMaxStraight];

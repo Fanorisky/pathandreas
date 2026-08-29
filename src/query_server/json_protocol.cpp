@@ -83,7 +83,9 @@ std::string HandleQueryJson(const std::string& request,
         PathResult p = pathfinder->FindPath(from, to, world);
         json wps = json::array();
         for (const auto& v : p.waypoints) wps.push_back(vecArr(v));
-        return json{{"type", "find_path_result"}, {"id", id}, {"success", p.success}, {"waypoints", wps}}.dump();
+        // partial=true: the goal is unreachable; waypoints lead only part of the way.
+        return json{{"type", "find_path_result"}, {"id", id}, {"success", p.success},
+                    {"partial", p.partial}, {"waypoints", wps}}.dump();
     }
 
     if (type == "move_along_surface") {

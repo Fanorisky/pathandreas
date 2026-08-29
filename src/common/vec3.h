@@ -111,6 +111,10 @@ struct RayHitResult {
 struct PathResult {
     std::vector<Vec3> waypoints;
     bool success = false;
+    // True when Detour could not reach the goal polygon and returned the best
+    // partial path instead (DT_PARTIAL_RESULT). success=true + partial=true
+    // means "walk this far, but the destination is unreachable from here".
+    bool partial = false;
 };
 
 struct CollisionMesh {

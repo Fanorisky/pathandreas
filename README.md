@@ -126,8 +126,12 @@ requests on that socket run on a thread pool.
 **path**
 ```json
 {"type":"find_path","id":"req-3","from":[x,y,z],"to":[x,y,z]}
-{"type":"find_path_result","id":"req-3","success":true,"waypoints":[[x,y,z],...]}
+{"type":"find_path_result","id":"req-3","success":true,"partial":false,"waypoints":[[x,y,z],...]}
 ```
+
+`partial: true` means the goal is unreachable on the current navmesh and the
+waypoints lead only part of the way (Detour partial result). Treat it as
+"no route", not as a route.
 
 **move along surface**
 ```json
