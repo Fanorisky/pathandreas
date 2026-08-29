@@ -28,9 +28,9 @@ WQS_SRC := \
 BUILD := build
 OBJS  := $(patsubst %.cpp,$(BUILD)/%.o,$(WQS_SRC) $(RECAST_SRC) $(DETOUR_SRC))
 
-.PHONY: all clean test service builder
+.PHONY: all clean test service builder components
 
-all: $(BUILD)/world-query-service $(BUILD)/navmesh_builder $(BUILD)/wqs_tests
+all: $(BUILD)/world-query-service $(BUILD)/navmesh_builder $(BUILD)/wqs_tests $(BUILD)/navmesh_components
 
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
@@ -57,3 +57,7 @@ builder: $(BUILD)/navmesh_builder
 
 clean:
 	rm -rf $(BUILD)
+
+$(BUILD)/navmesh_components: $(OBJS) tools/navmesh_components.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) tools/navmesh_components.cpp $(OBJS) $(LDFLAGS) -o $@
