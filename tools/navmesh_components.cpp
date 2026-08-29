@@ -135,6 +135,10 @@ int main(int argc, char** argv) {
             const float* v = &t->verts[poly->verts[j] * 3];
             cx += v[0]; cy += -v[2]; cz += v[1];
         }
+        // Poly centroid, not vertex sum - forgetting the division inflated
+        // component centroids by the average vertex count (~4x) and made
+        // ordinary city fragments look like far-away stray geometry.
+        cx /= poly->vertCount; cy /= poly->vertCount; cz /= poly->vertCount;
         Stat& s = st[find(i)];
         s.count++; s.cx += cx; s.cy += cy; s.cz += cz;
     }
