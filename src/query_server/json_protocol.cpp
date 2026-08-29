@@ -1,5 +1,7 @@
 #include "query_server/json_protocol.h"
 #include "nlohmann/json.hpp"
+#include "road_network/road_network.h"
+#include "route_planner/route_planner.h"
 
 using json = nlohmann::json;
 
@@ -97,6 +99,21 @@ std::string HandleQueryJson(const std::string& request,
             return errorResp(id, err).dump();
         Vec3 pos = pathfinder->MoveAlongSurface(from, delta);
         return json{{"type", "move_along_surface_result"}, {"id", id}, {"position", vecArr(pos)}}.dump();
+    }
+
+    if (type == "find_hybrid_path") {
+        if (!roads || !roads->ready())
+            return errorResp(id, "road network not loaded").dump();
+        Vec3 from, to;
+        if (!parseVec(req["from"], from, err) || !parseVec(req["to"], to, err))
+            return errorResp(id, err).dump();
+        // Road-network corridor with grounded waypoints: long-distance
+        // walking routes that stay connected where the navmesh fragments.
+        RoutePlanner::HybridResult r = RoutePlanner::ComposeHybridRoute(*roads, world, from, to);
+        json wps = json::array();
+        for (const auto& v : r.waypoints) wps.push_back(vecArr(v));
+        return json{{"type", "find_hybrid_path_result"}, {"id", id},
+                    {"success", r.success}, {"waypoints", wps}}.dump();
     }
 
     if (type == "find_vehicle_path") {

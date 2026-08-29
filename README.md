@@ -134,10 +134,26 @@ requests on that socket run on a thread pool.
 waypoints lead only part of the way (Detour partial result). Treat it as
 "no route", not as a route.
 
+**hybrid path** (walking, requires `--roads`; macro road route + grounded waypoints)
+```json
+{"type":"find_hybrid_path","id":"req-5","from":[x,y,z],"to":[x,y,z]}
+{"type":"find_hybrid_path_result","id":"req-5","success":true,"waypoints":[[x,y,z],...]}
+```
+Long-distance pedestrian routing: the traffic node graph picks the corridor
+(it is connected where the navmesh fragments between cities) and every
+waypoint is ground-snapped, at ~25-unit spacing. Waypoint 0 and the last are
+your exact endpoint positions. Semantics: guaranteed road-following route to
+the node nearest the goal - not exact reachability; the final approach into
+an off-road goal is the consumer's business. Pair with move_along_surface
+per tick; when a tick stops making progress (navmesh gap), switch to direct
+movement + find_ground_z until the next waypoint - verified end to end:
+a simulated pedestrian walked Grove Street -> San Fierro (7,005 units,
+2,813 movement ticks, 0.7% recovery ticks) arriving 0.2 units from the goal.
+
 **vehicle path** (road network, requires `--roads`)
 ```json
-{"type":"find_vehicle_path","id":"req-5","from":[x,y,z],"to":[x,y,z]}
-{"type":"find_vehicle_path_result","id":"req-5","success":true,"waypoints":[[x,y,z],...]}
+{"type":"find_vehicle_path","id":"req-5b","from":[x,y,z],"to":[x,y,z]}
+{"type":"find_vehicle_path_result","id":"req-5b","success":true,"waypoints":[[x,y,z],...]}
 ```
 Waypoints are traffic-node positions (road centrelines) and the first/last are
 the nodes nearest to from/to - endpoints may sit tens of units from the exact
