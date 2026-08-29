@@ -246,7 +246,14 @@ dtNavMesh* BuildTiledNavMesh(const CollisionMesh& mesh, const NavBuildConfig& cf
     float bmin[3], bmax[3];
     calcBounds(rv, bmin, bmax);
 
-    const float tw = cfg.tileWorldSize;
+    // Tiles must span an integer number of voxels. If tileWorldSize is not a
+    // multiple of cs, each tile's polymesh overshoots the logical tile boundary
+    // by the rounding remainder (ceil(160/0.3)=534 voxels = 160.2 world units),
+    // so adjacent tiles' border portal planes sit that remainder apart and
+    // Detour (0.01 match tolerance in findConnectingPolys) rejects every
+    // inter-tile link. Snap the tile size up to the next whole voxel multiple
+    // so tile N's +x portal plane lands exactly on tile N+1's -x portal plane.
+    const float tw = std::ceil(cfg.tileWorldSize / cfg.cs) * cfg.cs;
     const int twCount = std::max(1, static_cast<int>(std::ceil((bmax[0] - bmin[0]) / tw)));
     const int thCount = std::max(1, static_cast<int>(std::ceil((bmax[2] - bmin[2]) / tw)));
 
