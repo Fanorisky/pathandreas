@@ -18,6 +18,8 @@ add_library(recast_detour STATIC ${RECAST_SRC} ${DETOUR_SRC})
 target_include_directories(recast_detour PUBLIC
     ${RECAST_DIR}/Recast/Include
     ${RECAST_DIR}/Detour/Include)
+# 64-bit poly refs: no per-tile poly-count ceiling (see Makefile note).
+target_compile_definitions(recast_detour PUBLIC DT_POLYREF64)
 
 # --- Optional Bullet ---
 if(WQS_USE_BULLET)

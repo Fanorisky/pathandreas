@@ -3,6 +3,12 @@
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -pthread
+# 64-bit polygon references remove Detour's per-tile poly-count ceiling
+# (tileBits + polyBits <= 22 under 32-bit refs). With ~1444 tiles the 32-bit
+# budget caps a tile at 2048 polys and addTile silently drops the densest
+# city tiles. Must be defined consistently for every TU that includes
+# DetourNavMesh.h - it changes the dtPolyRef type.
+CXXFLAGS += -DDT_POLYREF64
 INCLUDES  = -Isrc -Ithird_party \
             -Ithird_party/recastnavigation/Recast/Include \
             -Ithird_party/recastnavigation/Detour/Include
