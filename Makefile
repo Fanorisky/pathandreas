@@ -1,0 +1,59 @@
+# Makefile for environments without CMake. Default backend is the built-in BVH.
+# For Bullet: cmake -DWQS_USE_BULLET=ON ..
+
+CXX      ?= g++
+CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -pthread
+INCLUDES  = -Isrc -Ithird_party \
+            -Ithird_party/recastnavigation/Recast/Include \
+            -Ithird_party/recastnavigation/Detour/Include
+LDFLAGS   = -pthread
+
+RECAST_SRC := $(wildcard third_party/recastnavigation/Recast/Source/*.cpp)
+DETOUR_SRC := $(wildcard third_party/recastnavigation/Detour/Source/*.cpp)
+
+WQS_SRC := \
+    src/collision_loader/tessellate.cpp \
+    src/collision_loader/cadb.cpp \
+    src/collision_loader/col.cpp \
+    src/collision_loader/test_city.cpp \
+    src/collision_world/bvh.cpp \
+    src/collision_world/collision_world.cpp \
+    src/collision_world/bullet_backend.cpp \
+    src/navmesh_builder/navmesh_file.cpp \
+    src/navmesh_builder/navmesh_builder.cpp \
+    src/pathfinder/pathfinder.cpp \
+    src/query_server/json_protocol.cpp \
+    src/query_server/query_server.cpp
+
+BUILD := build
+OBJS  := $(patsubst %.cpp,$(BUILD)/%.o,$(WQS_SRC) $(RECAST_SRC) $(DETOUR_SRC))
+
+.PHONY: all clean test service builder
+
+all: $(BUILD)/world-query-service $(BUILD)/navmesh_builder $(BUILD)/wqs_tests
+
+$(BUILD)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+$(BUILD)/world-query-service: $(OBJS) src/main.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) src/main.cpp $(OBJS) $(LDFLAGS) -o $@
+
+$(BUILD)/navmesh_builder: $(OBJS) tools/navmesh_builder_cli.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) tools/navmesh_builder_cli.cpp $(OBJS) $(LDFLAGS) -o $@
+
+$(BUILD)/wqs_tests: $(OBJS) tests/test_all.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) tests/test_all.cpp $(OBJS) $(LDFLAGS) -o $@
+
+test: $(BUILD)/wqs_tests
+	$(BUILD)/wqs_tests
+
+service: $(BUILD)/world-query-service
+
+builder: $(BUILD)/navmesh_builder
+
+clean:
+	rm -rf $(BUILD)

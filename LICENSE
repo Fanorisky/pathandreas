@@ -1,0 +1,39 @@
+World Query Service (Locus) — original source
+=============================================
+
+Copyright (c) 2026
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+Third-party
+-----------
+
+- Recast Navigation (Recast + Detour) is zlib-licensed. See
+  third_party/recastnavigation/License.txt.
+- nlohmann/json is MIT. See the header in third_party/nlohmann/json.hpp.
+- Bullet Physics, if fetched via CMake -DWQS_USE_BULLET=ON, is zlib-licensed.
+
+ColAndreas / CADB
+-----------------
+
+The CADB *file format* is documented in ColAndreas (Pottus/ColAndreas, GPL-3.0).
+This repository contains an original parser written from that format description;
+it is not a copy of ColAndreas source. File formats themselves are not
+copyrightable, but:
+
+  If you later copy ColAndreas source (or a derivative) into this tree and
+  distribute the result, GPL-3.0 obligations of ColAndreas apply to that
+  combined work.
+
+GTA San Andreas collision (.col) and map data are copyright Rockstar Games and
+must not be redistributed. This project ships only a synthetic test city.
