@@ -123,8 +123,27 @@ TileResult buildTile(rcContext* ctx, const RecastVerts& rv, const NavBuildConfig
     }
     const int ntris = static_cast<int>(tileTris.size() / 3);
     std::vector<unsigned char> triAreas(static_cast<size_t>(ntris));
-    rcMarkWalkableTriangles(ctx, cfg.walkableSlopeAngle, rv.verts.data(), nverts,
-                            tileTris.data(), ntris, triAreas.data());
+    // GTA .col face windings are inconsistent (the game itself collides on both
+    // sides), so roughly half of all flat surfaces come with downward-facing
+    // normals, and rcMarkWalkableTriangles rejects them as unwalkable. That
+    // silently deletes entire roads and pavements from the navmesh while the
+    // correctly-wound duplicate surfaces buried under them also fail the
+    // agent-height clearance filter. Mark walkability by ABSOLUTE slope
+    // instead: the orientation of a face does not matter, only its steepness.
+    {
+        const float cosSlope = std::cos(cfg.walkableSlopeAngle * 3.14159265f / 180.0f);
+        for (int i = 0; i < ntris; ++i) {
+            const float* va = &rv.verts[static_cast<size_t>(tileTris[i*3+0]) * 3];
+            const float* vb = &rv.verts[static_cast<size_t>(tileTris[i*3+1]) * 3];
+            const float* vc = &rv.verts[static_cast<size_t>(tileTris[i*3+2]) * 3];
+            const float ux = vb[0]-va[0], uy = vb[1]-va[1], uz = vb[2]-va[2];
+            const float vx = vc[0]-va[0], vy = vc[1]-va[1], vz = vc[2]-va[2];
+            const float nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
+            const float len = std::sqrt(nx*nx + ny*ny + nz*nz);
+            triAreas[i] = (len > 1e-9f && std::fabs(ny) / len >= cosSlope)
+                          ? RC_WALKABLE_AREA : RC_NULL_AREA;
+        }
+    }
     if (!rcRasterizeTriangles(ctx, rv.verts.data(), nverts, tileTris.data(),
                               triAreas.data(), ntris, *solid, cfg.walkableClimb)) {
         rcFreeHeightField(solid);
