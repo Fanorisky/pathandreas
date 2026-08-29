@@ -16,10 +16,10 @@
 namespace wqs {
 namespace {
 
-constexpr int kMaxPolys = 512;
-constexpr int kMaxStraight = 512;
+constexpr int kMaxPolys = 16384;
+constexpr int kMaxStraight = 16384;
 constexpr int kMaxVisited = 32;
-constexpr int kMaxNodes = 4096;
+constexpr int kMaxNodes = 65535;
 
 void toRc(const Vec3& g, float* r) { gtaToRecast(g, r); }
 Vec3 toGta(const float* r) { return recastToGta(r); }
