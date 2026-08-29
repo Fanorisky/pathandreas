@@ -64,5 +64,40 @@ HybridResult ComposeHybridRoute(const RoadNetwork& roads,
     return out;
 }
 
+OffroadLeg CheckOffroadLeg(const CollisionWorld* world, const Vec3& from, const Vec3& to) {
+    OffroadLeg leg;
+    leg.distance = (to - from).length();
+    if (!world || leg.distance < 1.f) return leg;
+    // Sample the ground every ~5 units. A leg stops being drivable when the
+    // ground disappears (cliff overhang, water) or consecutive samples differ
+    // by more than 3 units of height (~31 degrees over 5 units - steeper than
+    // a normal car climb). Coarse by design: no width, no obstacles below car
+    // height; it answers "is there drivable ground in a straight line", not
+    // "is this a road".
+    const int samples = std::max(2, static_cast<int>(leg.distance / 5.f));
+    float prevZ = from.z;
+    bool havePrev = false;
+    for (int i = 0; i <= samples; ++i) {
+        const float t = static_cast<float>(i) / samples;
+        const float x = from.x + (to.x - from.x) * t;
+        const float y = from.y + (to.y - from.y) * t;
+        float z = 0.f;
+        // Cast from a little above the previous sample, then much higher: a
+        // hill crest between samples would otherwise look like missing ground.
+        if (!world->FindGroundZFrom(x, y, prevZ + 10.f, z) &&
+            !world->FindGroundZFrom(x, y, prevZ + 60.f, z)) {
+            leg.drivable = false;
+            break;
+        }
+        if (havePrev && std::fabs(z - prevZ) > 3.f) {
+            leg.drivable = false;
+            break;
+        }
+        prevZ = z;
+        havePrev = true;
+    }
+    return leg;
+}
+
 } // namespace RoutePlanner
 } // namespace wqs

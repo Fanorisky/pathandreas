@@ -33,6 +33,16 @@ HybridResult ComposeHybridRoute(const RoadNetwork& roads,
                                 const Vec3& from, const Vec3& to,
                                 float minSpacing = 25.f);
 
+// A straight off-road leg (vehicle position <-> nearest road node). The node
+// graph has no edges there, so the route is a direct line; this check walks
+// the line through the collision world to report whether a car can actually
+// drive it - ground must exist along the way and rise in car-friendly steps.
+struct OffroadLeg {
+    float distance = 0.f;  // straight-line length of the leg
+    bool drivable = true;  // ground-continuity check passed
+};
+OffroadLeg CheckOffroadLeg(const CollisionWorld* world, const Vec3& from, const Vec3& to);
+
 } // namespace RoutePlanner
 
 } // namespace wqs

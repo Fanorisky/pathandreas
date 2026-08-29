@@ -123,10 +123,26 @@ std::string HandleQueryJson(const std::string& request,
         if (!parseVec(req["from"], from, err) || !parseVec(req["to"], to, err))
             return errorResp(id, err).dump();
         RoadNetwork::RouteResult r = roads->findPath(from, to);
+        if (!r.success || r.waypoints.empty())
+            return json{{"type", "find_vehicle_path_result"}, {"id", id},
+                        {"success", false}, {"waypoints", json::array()}}.dump();
+        // The node route covers road to road. The legs from the caller's
+        // positions to the end nodes are off-road straight lines - include
+        // them as endpoints and report each leg's length and drivability so
+        // the consumer knows when it is being asked to cross country.
+        const Vec3& firstNode = r.waypoints.front();
+        const Vec3& lastNode = r.waypoints.back();
+        RoutePlanner::OffroadLeg legStart = RoutePlanner::CheckOffroadLeg(world, from, firstNode);
+        RoutePlanner::OffroadLeg legGoal = RoutePlanner::CheckOffroadLeg(world, lastNode, to);
         json wps = json::array();
+        if ((from - firstNode).lengthSq() > 4.f) wps.push_back(vecArr(from));
         for (const auto& v : r.waypoints) wps.push_back(vecArr(v));
+        if ((to - lastNode).lengthSq() > 4.f) wps.push_back(vecArr(to));
+        json legS = {{"distance", legStart.distance}, {"drivable", legStart.drivable}};
+        json legG = {{"distance", legGoal.distance}, {"drivable", legGoal.drivable}};
         return json{{"type", "find_vehicle_path_result"}, {"id", id},
-                    {"success", r.success}, {"waypoints", wps}}.dump();
+                    {"success", r.success}, {"waypoints", wps},
+                    {"offroad_start", legS}, {"offroad_goal", legG}}.dump();
     }
 
     if (type == "nearest_node") {

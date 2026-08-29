@@ -153,11 +153,20 @@ a simulated pedestrian walked Grove Street -> San Fierro (7,005 units,
 **vehicle path** (road network, requires `--roads`)
 ```json
 {"type":"find_vehicle_path","id":"req-5b","from":[x,y,z],"to":[x,y,z]}
-{"type":"find_vehicle_path_result","id":"req-5b","success":true,"waypoints":[[x,y,z],...]}
+{"type":"find_vehicle_path_result","id":"req-5b","success":true,
+ "waypoints":[[x,y,z],...],
+ "offroad_start":{"distance":45.5,"drivable":true},
+ "offroad_goal":{"distance":7.2,"drivable":true}}
 ```
-Waypoints are traffic-node positions (road centrelines) and the first/last are
-the nodes nearest to from/to - endpoints may sit tens of units from the exact
-positions. Combine with `find_path` (navmesh) for the on-foot legs.
+Waypoints are traffic-node positions (road centrelines) bracketed by the
+caller's exact endpoint positions. The node graph covers roads and dirt roads
+(most "off-road" spots are under 100 units from a node; beaches and mountain
+slopes are the exceptions), but the legs from the endpoints to their nearest
+nodes are straight lines the graph knows nothing about - the offroad_start /
+offroad_goal objects report each leg's length and a coarse drivability check
+(ground sampled every ~5 units; no ground or height steps over ~31 degrees
+fail it). `drivable: false` means a car cannot simply drive that line: handle
+it yourself (crawl with raycasts, pick another node, refuse the job).
 
 **nearest road node** (requires `--roads`)
 ```json
