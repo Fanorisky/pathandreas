@@ -1,8 +1,17 @@
-# World Query Service (Locus)
+# PathAndreas
 
 External **world-awareness** and **pathfinding** process for SA-MP / open.mp.
 It never talks to the game SDK. Pawn (or anything else) asks geometric
 questions over WebSocket; this process answers them.
+
+Continuation of world-query-service (Locus). The navmesh build that
+originally failed here was repaired (see git history for the two root
+causes: tile/voxel grid misalignment that prevented all inter-tile
+links, and inconsistent .col face windings that erased roads from the
+raster). After the fixes a full-map bake has one connected component
+covering 58.6% of all polygons; San Fierro and Las Venturas are still
+isolated (bridge sidewalks vs agent radius) and are the next work
+items.
 
 ```
 .cadb / .col  →  triangle mesh  →  BVH or Bullet raycast
