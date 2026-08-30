@@ -3,6 +3,7 @@
 #include "navmesh_builder/navmesh_builder.h"
 #include "pathfinder/pathfinder.h"
 #include "road_network/road_network.h"
+#include "road_network/sa_paths.h"
 #include "world_manager/world_manager.h"
 #include "world_manager/world_committer.h"
 #include "query_server/query_server.h"
@@ -27,6 +28,8 @@ static void usage() {
         "  --navmesh PATH       Load a previously built .navmesh (WQS1)\n"
         "  --navmesh-vehicle P  Load a car-agent navmesh for offroad legs\n"
         "  --roads PATH         Load the vehicle road network (GPS.dat format)\n"
+        "  --paths DIR          Load GTA SA NODES*.DAT (vehicle + pedestrian graphs,\n"
+        "                       lane counts, node flags); preferred over --roads\n"
         "  --build-navmesh PATH Build navmesh from the loaded collision mesh and save\n"
         "  --tile-size N        Navmesh tile size in world units (default 128)\n"
         "  --threads N          Query pool AND navmesh bake threads (default hardware)\n"
@@ -37,7 +40,7 @@ static void usage() {
 }
 
 int main(int argc, char** argv) {
-    std::string cadb, col, navmeshIn, navmeshOut, roadsFile, navmeshVehicleIn;
+    std::string cadb, col, navmeshIn, navmeshOut, roadsFile, navmeshVehicleIn, pathsDir;
     bool testCity = false;
     ServerConfig scfg;
     NavBuildConfig ncfg;
@@ -63,6 +66,8 @@ int main(int argc, char** argv) {
             if (!next(navmeshVehicleIn)) { usage(); return 2; }
         } else if (!std::strcmp(argv[i], "--roads")) {
             if (!next(roadsFile)) { usage(); return 2; }
+        } else if (!std::strcmp(argv[i], "--paths")) {
+            if (!next(pathsDir)) { usage(); return 2; }
         } else if (!std::strcmp(argv[i], "--build-navmesh")) {
             if (!next(navmeshOut)) { usage(); return 2; }
         } else if (!std::strcmp(argv[i], "--tile-size")) {
@@ -145,8 +150,32 @@ int main(int argc, char** argv) {
         }
     }
 
-    RoadNetwork roads;
-    if (!roadsFile.empty()) {
+    // The SA path files are the better source when they are available: they
+    // carry the pedestrian graph, per-node class flags and per-segment lane
+    // counts, none of which survive into GPS.dat. --roads stays supported
+    // because it needs no game install.
+    RoadNetwork roads, pedRoads;
+    if (!pathsDir.empty()) {
+        SaPathsStats st;
+        std::string err;
+        if (!LoadSaPaths(pathsDir, roads, pedRoads, st, err)) {
+            WQS_ERROR("SA paths: %s", err.c_str());
+            return 1;
+        }
+        if (!roadsFile.empty())
+            WQS_WARN("--paths given, ignoring --roads %s", roadsFile.c_str());
+        // Connectivity is worth stating at startup: the pedestrian graph is
+        // per-city by design, so an inter-city walk has to fall back to the
+        // road graph and a consumer should not be surprised by that.
+        const auto vc = roads.componentSizes(RouteProfile::Car());
+        const auto pc = pedRoads.componentSizes(RouteProfile::Ped());
+        if (!vc.empty())
+            WQS_INFO("Vehicle graph: %zu components, biggest %ld nodes", vc.size(), vc[0]);
+        if (!pc.empty())
+            WQS_INFO("Pedestrian graph: %zu components, biggest %ld nodes "
+                     "(one per city - inter-city walks route on the road graph)",
+                     pc.size(), pc[0]);
+    } else if (!roadsFile.empty()) {
         std::string err;
         if (!roads.loadFile(roadsFile, err)) {
             WQS_ERROR("road network: %s", err.c_str());
@@ -154,6 +183,7 @@ int main(int argc, char** argv) {
         }
     }
     backends.roads = &roads;
+    backends.pedRoads = &pedRoads;
 
     // Optional car-agent navmesh (larger radius, low climb, shallow slopes):
     // the routing backend for vehicle off-road legs and pure off-road trips.

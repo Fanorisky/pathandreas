@@ -21,7 +21,8 @@ struct Backends {
     std::unique_ptr<CollisionWorld> world;
     std::unique_ptr<Pathfinder> pathfinder;         // pedestrian navmesh
     std::unique_ptr<Pathfinder> vehiclePathfinder;  // car-agent navmesh (optional)
-    RoadNetwork* roads = nullptr;                   // not owned; edits never affect it
+    RoadNetwork* roads = nullptr;                   // vehicle node graph
+    RoadNetwork* pedRoads = nullptr;                 // pedestrian node graph
 };
 
 // Protocol-facing surface for world editing (RemoveBuilding / CreateObject

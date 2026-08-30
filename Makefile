@@ -29,6 +29,7 @@ WQS_SRC := \
     src/navmesh_builder/navmesh_builder.cpp \
     src/pathfinder/pathfinder.cpp \
     src/road_network/road_network.cpp \
+    src/road_network/sa_paths.cpp \
     src/route_planner/route_planner.cpp \
     src/world_manager/world_manager.cpp \
     src/world_manager/world_committer.cpp \

@@ -129,7 +129,7 @@ std::string wsDecode(std::string& buf, bool& closed, bool& needMore, bool& isPin
 std::string answer(const std::string& request, Backends& b, WorldEditor* editor) {
     std::shared_lock<std::shared_mutex> lk(b.mu);
     return HandleQueryJson(request, b.world.get(), b.pathfinder.get(), b.roads,
-                           b.vehiclePathfinder.get(), editor);
+                           b.vehiclePathfinder.get(), editor, b.pedRoads);
 }
 
 void handleClient(int fd, Backends& backends, WorldEditor* editor, ThreadPool& pool) {
@@ -224,8 +224,8 @@ void handleClient(int fd, Backends& backends, WorldEditor* editor, ThreadPool& p
                 } else {
                     body = "PathAndreas\n"
                            "WebSocket JSON: raycast, find_ground_z, find_path, find_hybrid_path,\n"
-                           "  find_vehicle_path, find_offroad_path, move_along_surface,\n"
-                           "  nearest_node, world_* (editing), status\n"
+                           "  find_vehicle_path, find_offroad_path, find_boat_path,\n"
+                           "  move_along_surface, nearest_node, world_* (editing), status\n"
                            "HTTP POST /query  same JSON body\n"
                            "HTTP GET  /health\n";
                 }

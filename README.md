@@ -8,10 +8,12 @@ Continuation of world-query-service (Locus). The navmesh build that
 originally failed here was repaired (see git history for the two root
 causes: tile/voxel grid misalignment that prevented all inter-tile
 links, and inconsistent .col face windings that erased roads from the
-raster). After the fixes a full-map bake has one connected component
-covering 58.6% of all polygons; San Fierro and Las Venturas are still
-isolated (bridge sidewalks vs agent radius) and are the next work
-items.
+raster). A full-map pedestrian bake now covers every tile, but its
+largest connected component is only ~20.8% of the mesh: San Andreas is
+genuinely not walkable end to end, and the 58.6% an earlier bake
+reported was partly stitched through the sea floor, which the seabed
+filter removed. Inter-city walking is therefore routed on the node
+graphs (below) rather than on the mesh alone.
 
 ```
 .cadb / .col  →  triangle mesh  →  BVH or Bullet raycast
@@ -102,10 +104,17 @@ from the walkable mesh (don’t place those models, or strip them before bake).
 
 # Production-shaped
 ./build/pathandreas --cadb scriptfiles/colandreas/ColAndreas.cadb \
-    --navmesh data/sa.navmesh --roads data/GPS.dat \
+    --navmesh data/sa.navmesh --paths data/paths \
     --navmesh-vehicle data/gta_vehicle.navmesh \
     --bind 0.0.0.0 --port 8090 --threads 4
 ```
+
+`--paths DIR` wants the game's own `NODES0.DAT` .. `NODES63.DAT` (from the
+GTA SA install's `data/paths`). It supersedes `--roads data/GPS.dat`, which
+stays supported for installs without those files but carries neither the
+pedestrian graph nor lane data. There is no authentication or rate limiting
+on the listener - bind it to localhost, or keep it behind something that has
+both, since any client can trigger a multi-minute `world_commit`.
 
 ## Protocol
 
@@ -135,30 +144,52 @@ requests on that socket run on a thread pool.
 waypoints lead only part of the way (Detour partial result). Treat it as
 "no route", not as a route.
 
-**hybrid path** (walking, requires `--roads`; macro road route + grounded waypoints)
+**hybrid path** (walking; node-graph corridor + grounded waypoints)
 ```json
 {"type":"find_hybrid_path","id":"req-5","from":[x,y,z],"to":[x,y,z]}
-{"type":"find_hybrid_path_result","id":"req-5","success":true,"waypoints":[[x,y,z],...]}
+{"type":"find_hybrid_path_result","id":"req-5","success":true,"graph":"ped",
+ "waypoints":[[x,y,z],...]}
 ```
-Long-distance pedestrian routing: the traffic node graph picks the corridor
-(it is connected where the navmesh fragments between cities) and every
-waypoint is ground-snapped, at ~25-unit spacing. Waypoint 0 and the last are
-your exact endpoint positions. Semantics: guaranteed road-following route to
-the node nearest the goal - not exact reachability; the final approach into
-an off-road goal is the consumer's business. Pair with move_along_surface
-per tick; when a tick stops making progress (navmesh gap), switch to direct
-movement + find_ground_z until the next waypoint - verified end to end:
-a simulated pedestrian walked Grove Street -> San Fierro (7,005 units,
-2,813 movement ticks, 0.7% recovery ticks) arriving 0.2 units from the goal.
+Pedestrian routing that stays connected where the navmesh fragments. With
+`--paths` it uses the game's **pedestrian** node graph, so the route follows
+sidewalks: at Grove Street the nearest pedestrian node is 1.4 units away
+where the nearest road node is 10.7 units out in the carriageway. That graph
+is per-city, so when the goal is in another city the route falls back to the
+road graph and `graph` says `"vehicle"` - honest signal that those waypoints
+are road centre lines. Every waypoint is ground-snapped at ~25-unit spacing;
+waypoint 0 and the last are your exact endpoint positions.
 
-**vehicle path** (road network, requires `--roads`)
+Semantics: a guaranteed graph-following route to the node nearest the goal -
+not exact reachability; the final approach into an off-graph goal is the
+consumer's business. Pair with move_along_surface per tick; when a tick stops
+making progress (navmesh gap), switch to direct movement + find_ground_z
+until the next waypoint - verified end to end: a simulated pedestrian walked
+Grove Street -> San Fierro (7,005 units, 2,813 movement ticks, 0.7% recovery
+ticks) arriving 0.2 units from the goal.
+
+**vehicle path** (road network)
 ```json
 {"type":"find_vehicle_path","id":"req-5b","from":[x,y,z],"to":[x,y,z]}
 {"type":"find_vehicle_path_result","id":"req-5b","success":true,
  "waypoints":[[x,y,z],...],
+ "lanes":[2,2,1,...], "has_lane_data":true,
  "offroad_start":{"distance":45.5,"drivable":true},
  "offroad_goal":{"distance":7.2,"drivable":true}}
 ```
+With `--paths`, `lanes[i]` is the number of lanes available driving from
+waypoint `i` to `i+1` - what a consumer needs to offset an NPC into its own
+lane instead of straddling the centre line. It is 0 on off-road and
+mesh-routed legs, which have no lane data. Lane counts are also how San
+Andreas records one-way streets, so the default profile refuses to enter a
+segment with no lane in the direction of travel; three optional fields
+override the profile per query:
+
+| field | default | effect |
+|---|---|---|
+| `one_way` | `true` | `false` lets the route drive against the lanes |
+| `allow_emergency` | `true` | `false` restricts to nodes not flagged emergency-only |
+| `highway_cost` | `0.8` | edge cost multiplier on highway nodes; `1.0` disables the freeway preference |
+
 Waypoints are traffic-node positions (road centrelines) bracketed by the
 caller's exact endpoint positions. The node graph covers roads and dirt roads
 (most "off-road" spots are under 100 units from a node; beaches and mountain
@@ -181,11 +212,27 @@ line - either it was drivable, or no car-mesh route exists either.
 Car-mesh routing for trips that never touch a road (beach to beach,
 across open desert).
 
-**nearest road node** (requires `--roads`)
+**nearest node**
 ```json
-{"type":"nearest_node","id":"req-6","pos":[x,y,z]}
-{"type":"nearest_node_result","id":"req-6","found":true,"node":4653,"pos":[x,y,z]}
+{"type":"nearest_node","id":"req-6","pos":[x,y,z],"graph":"vehicle"}
+{"type":"nearest_node_result","id":"req-6","found":true,"graph":"vehicle",
+ "node":4653,"pos":[x,y,z],"distance":10.7,"flags":8194,
+ "highway":true,"emergency":false,"parking":false,"boat":false,"node_type":1}
 ```
+`graph` is `"vehicle"` (default) or `"ped"`. The same profile overrides as
+`find_vehicle_path` apply, so a car will not snap to the boat network and a
+query can refuse emergency-only nodes. The decoded class booleans are only
+returned for the vehicle graph - pedestrian nodes reuse those bits for
+something else, so only their raw `flags` is reported.
+
+**boat path** (requires `--paths`)
+```json
+{"type":"find_boat_path","id":"req-6b","from":[x,y,z],"to":[x,y,z]}
+{"type":"find_boat_path_result","id":"req-6b","success":true,"waypoints":[[x,y,z],...]}
+```
+San Andreas keeps its boat network in the same files as the roads, as nodes
+of type 2: 1,507 nodes forming one connected component over the water. LS
+coast -> San Fierro bay is 152 waypoints / ~4,500 units.
 
 **move along surface**
 ```json
@@ -247,16 +294,58 @@ Bakes drop triangles fully below z -1.5: the GTA sea floor is collision
 geometry, flat enough to rasterize as perfectly walkable, and without the
 filter NPCs route - and walk - underwater on both meshes.
 
-## Road network (GPS.dat)
+## Node graphs
 
-`--roads data/GPS.dat` loads the GTA SA traffic node graph - the road network
-the game's vehicle AI drives on (~27.6k nodes, one connected component
-covering every drivable road including the inter-city bridges). The file is
-the GPS.dat format distributed with the samp-gps plugin releases (the file
-format only; the loader here is original). The graph is the routing backend
-for vehicles; the navmesh remains the backend for pedestrians. A full
-LS -> San Fierro vehicle route (~7000 world units, 551 nodes) computes in
-~40 ms.
+San Andreas ships its own path networks, and they are a better routing
+backend than anything derived from geometry. Two loaders are supported.
+
+**`--paths DIR` (preferred): the game's `NODES0.DAT` .. `NODES63.DAT`.**
+One file per 750x750 unit square, holding two separate graphs plus the
+per-segment data the game's traffic AI uses. Measured over the stock files:
+
+| | nodes | directed edges |
+|---|---|---|
+| vehicles | 30,587 | 62,936 |
+| pedestrians | 37,650 | 80,686 |
+
+62,932 of the vehicle edges carry lane counts, and 12,287 of them have no
+lane in the direction of travel - that is how the format records one-way
+streets, since the link table itself is undirected. GPS.dat reports only 961.
+
+Under the car profile the vehicle graph is **one connected component of
+27,083 nodes**. The pedestrian graph is deliberately not: it has 179
+components, the largest being Los Santos (8,880), San Fierro (8,332) and
+Las Venturas (7,567), because vanilla San Andreas has no sidewalk between
+cities. 3,605 pedestrian nodes sit above z 500 - interior paths, which the
+navmesh bake excludes. So `find_hybrid_path` walks the pedestrian graph
+inside a city and falls back to the road graph between them.
+
+Flag bit 8 is documented as "emergency vehicles only" and does mark 7,669
+nodes forming continuous chains of their own. Excluding them is still not the
+default: over 300 random trips at least 500 units apart, dropping those nodes
+left 47% of routes longer, 23% more than a fifth longer, and 11 with no route
+at all. `allow_emergency: false` gives a strictly civilian network of 20,766
+nodes, 99.5% of it one component, for consumers that want it.
+
+Boat paths are in the same files as nodes of type 2 (1,507 nodes, one
+component) and are reachable through `find_boat_path`.
+
+The binary layout comes from the public GTAMods description ("Paths (GTA
+SA)"); this reader is original. Two blocks the description leaves open were
+measured against the stock files instead: the constant block after the link
+array is 768 bytes (`FF FF 00 00` x192, byte-identical in all 64 files) and
+the trailing block is exactly `linkCount + 384` bytes. The loader checks the
+whole file size against those strides up front, so a wrong assumption fails
+loudly rather than shifting the lane data by a few bytes.
+
+**`--roads data/GPS.dat` (fallback): the samp-gps text export.**
+~27.6k vehicle nodes, one connected component, no pedestrian graph, no flags,
+no lanes - it looks like the largest drivable component of the vehicle graph
+with the boat nodes removed. Useful when the game's path files are not
+available; the file format only, the loader here is original.
+
+Routing costs: a cross-city vehicle route is ~1.5 ms on the SA graph
+(LS -> San Fierro, 7,207 units), an intra-city pedestrian route ~0.5 ms.
 
 ## What this is not
 

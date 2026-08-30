@@ -15,6 +15,7 @@ std::string HandleQueryJson(const std::string& request,
                             const Pathfinder* pathfinder,
                             const RoadNetwork* roads = nullptr,
                             const Pathfinder* vehiclePathfinder = nullptr,
-                            WorldEditor* editor = nullptr);
+                            WorldEditor* editor = nullptr,
+                            const RoadNetwork* pedRoads = nullptr);
 
 } // namespace wqs

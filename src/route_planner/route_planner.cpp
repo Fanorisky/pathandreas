@@ -24,20 +24,32 @@ Vec3 groundSnap(const CollisionWorld* world, const Vec3& p) {
 
 } // namespace
 
-HybridResult ComposeHybridRoute(const RoadNetwork& roads,
+HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
+                                const RoadNetwork* vehRoads,
                                 const CollisionWorld* world,
                                 const Vec3& from, const Vec3& to,
                                 float minSpacing) {
     HybridResult out;
-    if (!roads.ready()) return out;
-    RoadNetwork::RouteResult route = roads.findPath(from, to);
-    if (!route.success || route.waypoints.empty()) return out;
+
+    // Sidewalks first. Inside a city this is the whole answer, and it is the
+    // difference between a pedestrian on the pavement and one walking up the
+    // middle of the road, which is what routing a person on the vehicle graph
+    // produces.
+    RoadNetwork::RouteResult route;
+    if (pedRoads && pedRoads->ready()) {
+        route = pedRoads->findPath(from, to, RouteProfile::Ped());
+        if (route.success && !route.waypoints.empty()) out.onSidewalks = true;
+    }
+    if (!out.onSidewalks) {
+        if (!vehRoads || !vehRoads->ready()) return out;
+        route = vehRoads->findPath(from, to, RouteProfile::Ped());
+        if (!route.success || route.waypoints.empty()) return out;
+    }
 
     // Backbone: node route downsampled to pedestrian pace. The first node is
-    // kept even if it is closer than minSpacing to `from` - walking toward a
-    // road node first is what gets a pedestrian out of an off-road start.
-    // The last node is always kept so the tail of the route stays on the road
-    // before the final approach to `to`.
+    // kept even if it is closer than minSpacing to `from` - walking toward it
+    // first is what gets a pedestrian off an off-graph start. The last node is
+    // always kept so the tail stays on the network before the final approach.
     std::vector<Vec3> backbone;
     backbone.reserve(route.waypoints.size() + 2);
     backbone.push_back(groundSnap(world, from));
@@ -51,11 +63,9 @@ HybridResult ComposeHybridRoute(const RoadNetwork& roads,
     }
     backbone.push_back(groundSnap(world, to));
 
-    // The final approach (last node -> goal) can be long when the goal is far
-    // from any road; ground-snap every backbone node so intermediate z stays
-    // truthful, but leave the downsampled spacing alone - the consumer walks
-    // this with move_along_surface and only needs course corrections, not a
-    // perfect polyline.
+    // Ground-snap every intermediate node so the z stays truthful, but leave
+    // the downsampled spacing alone - the consumer walks this with
+    // move_along_surface and needs course corrections, not a dense polyline.
     for (size_t i = 1; i + 1 < backbone.size(); ++i)
         backbone[i] = groundSnap(world, backbone[i]);
 

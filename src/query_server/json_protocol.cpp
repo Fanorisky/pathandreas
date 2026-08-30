@@ -26,6 +26,16 @@ json errorResp(const json& id, const std::string& msg) {
     return {{"type", "error"}, {"id", id}, {"error", msg}};
 }
 
+// Optional per-request overrides on a named profile, so a consumer can ask for
+// a delivery van that may cut through service roads or a police car that may
+// drive the wrong way, without the service inventing vehicle classes.
+RouteProfile applyProfileOverrides(RouteProfile p, const json& req) {
+    if (req.contains("one_way")) p.respectOneWay = req["one_way"].get<bool>();
+    if (req.contains("allow_emergency")) p.allowEmergency = req["allow_emergency"].get<bool>();
+    if (req.contains("highway_cost")) p.highwayCost = req["highway_cost"].get<float>();
+    return p;
+}
+
 } // namespace
 
 std::string HandleQueryJson(const std::string& request,
@@ -33,7 +43,8 @@ std::string HandleQueryJson(const std::string& request,
                             const Pathfinder* pathfinder,
                             const RoadNetwork* roads,
                             const Pathfinder* vehiclePathfinder,
-                            WorldEditor* editor) {
+                            WorldEditor* editor,
+                            const RoadNetwork* pedRoads) {
     json req;
     try {
         req = json::parse(request);
@@ -121,17 +132,38 @@ std::string HandleQueryJson(const std::string& request,
     }
 
     if (type == "find_hybrid_path") {
-        if (!roads || !roads->ready())
-            return errorResp(id, "road network not loaded").dump();
+        const bool haveGraph = (roads && roads->ready()) || (pedRoads && pedRoads->ready());
+        if (!haveGraph) return errorResp(id, "no node graph loaded").dump();
         Vec3 from, to;
         if (!parseVec(req["from"], from, err) || !parseVec(req["to"], to, err))
             return errorResp(id, err).dump();
-        // Road-network corridor with grounded waypoints: long-distance
-        // walking routes that stay connected where the navmesh fragments.
-        RoutePlanner::HybridResult r = RoutePlanner::ComposeHybridRoute(*roads, world, from, to);
+        // Node-graph corridor with grounded waypoints: walking routes that
+        // stay connected where the navmesh fragments. Prefers the pedestrian
+        // graph (sidewalks) and falls back to the road graph, which is the
+        // only one that spans cities.
+        RoutePlanner::HybridResult r =
+            RoutePlanner::ComposeHybridRoute(pedRoads, roads, world, from, to);
         json wps = json::array();
         for (const auto& v : r.waypoints) wps.push_back(vecArr(v));
         return json{{"type", "find_hybrid_path_result"}, {"id", id},
+                    {"success", r.success}, {"waypoints", wps},
+                    {"graph", r.onSidewalks ? "ped" : "vehicle"}}.dump();
+    }
+
+    if (type == "find_boat_path") {
+        if (!roads || !roads->ready())
+            return errorResp(id, "road network not loaded").dump();
+        if (!roads->hasLaneData())
+            return errorResp(id, "boat routing needs the SA path files (--paths)").dump();
+        Vec3 from, to;
+        if (!parseVec(req["from"], from, err) || !parseVec(req["to"], to, err))
+            return errorResp(id, err).dump();
+        // SA keeps its boat network in the same files as the roads, as nodes
+        // of type 2; it is one connected component of 1,507 nodes.
+        RoadNetwork::RouteResult r = roads->findPath(from, to, RouteProfile::Boat());
+        json wps = json::array();
+        for (const auto& v : r.waypoints) wps.push_back(vecArr(v));
+        return json{{"type", "find_boat_path_result"}, {"id", id},
                     {"success", r.success}, {"waypoints", wps}}.dump();
     }
 
@@ -141,7 +173,8 @@ std::string HandleQueryJson(const std::string& request,
         Vec3 from, to;
         if (!parseVec(req["from"], from, err) || !parseVec(req["to"], to, err))
             return errorResp(id, err).dump();
-        RoadNetwork::RouteResult r = roads->findPath(from, to);
+        const RouteProfile profile = applyProfileOverrides(RouteProfile::Car(), req);
+        RoadNetwork::RouteResult r = roads->findPath(from, to, profile);
         if (!r.success || r.waypoints.empty())
             return json{{"type", "find_vehicle_path_result"}, {"id", id},
                         {"success", false}, {"waypoints", json::array()}}.dump();
@@ -175,17 +208,36 @@ std::string HandleQueryJson(const std::string& request,
         const bool startRouted = !startLeg.empty();
         const bool goalRouted = !goalLeg.empty();
 
-        json wps = json::array();
+        // Waypoints and the lane count of the leg leaving each one are built
+        // together: off-road and mesh-routed legs have no lane data, so they
+        // report 0 rather than inheriting a neighbouring road's lanes.
+        std::vector<Vec3> pts;
+        std::vector<int> legLanes; // size pts.size() - 1
+        auto push = [&](const Vec3& p, int laneFromPrev) {
+            if (!pts.empty()) legLanes.push_back(laneFromPrev);
+            pts.push_back(p);
+        };
         // Straight legs carry the exact endpoints; mesh legs already start and
         // end on snapped positions adjacent to the node route, so the boundary
         // nodes are skipped to avoid duplicates.
-        if (!startRouted && (from - firstNode).lengthSq() > 4.f) wps.push_back(vecArr(from));
-        for (const auto& v : startLeg) wps.push_back(vecArr(v));
-        for (size_t i = startRouted ? 1 : 0;
-             i < r.waypoints.size() - (goalRouted ? 1 : 0); ++i)
-            wps.push_back(vecArr(r.waypoints[i]));
-        for (const auto& v : goalLeg) wps.push_back(vecArr(v));
-        if (!goalRouted && (to - lastNode).lengthSq() > 4.f) wps.push_back(vecArr(to));
+        if (!startRouted && (from - firstNode).lengthSq() > 4.f) push(from, 0);
+        for (const auto& v : startLeg) push(v, 0);
+        const size_t firstIdx = startRouted ? 1 : 0;
+        const size_t lastIdx = r.waypoints.size() - (goalRouted ? 1 : 0);
+        for (size_t i = firstIdx; i < lastIdx; ++i) {
+            // r.lanes[i-1] is the leg from node i-1 to node i; the first node
+            // pushed is entered from an off-road leg, which has none.
+            const int lane = (i > firstIdx && i - 1 < r.lanes.size())
+                                 ? static_cast<int>(r.lanes[i - 1]) : 0;
+            push(r.waypoints[i], lane);
+        }
+        for (const auto& v : goalLeg) push(v, 0);
+        if (!goalRouted && (to - lastNode).lengthSq() > 4.f) push(to, 0);
+
+        json wps = json::array();
+        for (const auto& v : pts) wps.push_back(vecArr(v));
+        json lanes = json::array();
+        for (const int l : legLanes) lanes.push_back(l);
 
         json legS = {{"distance", legStart.distance}, {"drivable", legStart.drivable},
                      {"routed", startRouted ? "mesh" : "straight"}};
@@ -193,21 +245,46 @@ std::string HandleQueryJson(const std::string& request,
                      {"routed", goalRouted ? "mesh" : "straight"}};
         return json{{"type", "find_vehicle_path_result"}, {"id", id},
                     {"success", r.success}, {"waypoints", wps},
+                    // lanes[i] = lanes available driving from waypoint i to
+                    // i+1, 0 where the network has no lane data for the leg.
+                    {"lanes", lanes}, {"has_lane_data", roads->hasLaneData()},
                     {"offroad_start", legS}, {"offroad_goal", legG}}.dump();
     }
 
     if (type == "nearest_node") {
-        if (!roads || !roads->ready())
-            return errorResp(id, "road network not loaded").dump();
+        // graph: "vehicle" (default) or "ped".
+        const std::string which = req.value("graph", "vehicle");
+        const RoadNetwork* g = (which == "ped") ? pedRoads : roads;
+        if (which != "ped" && which != "vehicle")
+            return errorResp(id, "graph must be \"vehicle\" or \"ped\"").dump();
+        if (!g || !g->ready())
+            return errorResp(id, which + " node graph not loaded").dump();
         Vec3 pos;
         if (!parseVec(req["pos"], pos, err))
             return errorResp(id, err).dump();
-        const long node = roads->nearestNode(pos);
+        const RouteProfile profile = applyProfileOverrides(
+            (which == "ped") ? RouteProfile::Ped() : RouteProfile::Car(), req);
+        const long node = g->nearestNode(pos, profile);
         const bool found = node >= 0;
-        json resp = {{"type", "nearest_node_result"}, {"id", id}, {"found", found}};
+        json resp = {{"type", "nearest_node_result"}, {"id", id}, {"found", found},
+                     {"graph", which}};
         if (found) {
+            const RoadNodeInfo& info = g->nodeInfo(node);
             resp["node"] = node;
-            resp["pos"] = vecArr(roads->nodePos(node));
+            resp["pos"] = vecArr(g->nodePos(node));
+            resp["distance"] = (g->nodePos(node) - pos).length();
+            resp["flags"] = info.flags;
+            // The class bits are only meaningful on vehicle nodes - a
+            // pedestrian node reuses those bits for something else, so
+            // reporting it as "emergency" would be a lie. Its raw flags are
+            // still returned above for anyone who wants to experiment.
+            if (which == "vehicle") {
+                resp["highway"] = (info.flags & SaFlags::kHighway) != 0;
+                resp["emergency"] = (info.flags & SaFlags::kEmergency) != 0;
+                resp["parking"] = (info.flags & SaFlags::kParking) != 0;
+                resp["boat"] = (info.flags & SaFlags::kBoat) != 0;
+                resp["node_type"] = info.type;
+            }
         }
         return resp.dump();
     }
@@ -272,6 +349,12 @@ std::string HandleQueryJson(const std::string& request,
         json resp = {{"type", "status_result"}, {"id", id}};
         resp["collision"] = world && !world->empty();
         resp["roads"] = roads && roads->ready();
+        if (roads && roads->ready()) {
+            resp["road_nodes"] = roads->nodeCount();
+            resp["lane_data"] = roads->hasLaneData();
+        }
+        resp["ped_roads"] = pedRoads && pedRoads->ready();
+        if (pedRoads && pedRoads->ready()) resp["ped_nodes"] = pedRoads->nodeCount();
         resp["world_editing"] = editor != nullptr;
         if (editor) {
             resp["pending_removes"] = editor->removeCount();

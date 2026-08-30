@@ -3,6 +3,8 @@
 #include "navmesh_builder/navmesh_builder.h"
 #include "pathfinder/pathfinder.h"
 #include "query_server/json_protocol.h"
+#include "road_network/road_network.h"
+#include "road_network/sa_paths.h"
 #include "world_manager/world_manager.h"
 #include "common/log.h"
 
@@ -10,6 +12,9 @@
 #include <cmath>
 #include <string>
 #include <cstdlib>
+#include <cstdint>
+#include <vector>
+#include <sys/stat.h>
 
 using namespace wqs;
 
@@ -18,6 +23,83 @@ static int gFails = 0;
     if (!(cond)) { std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, msg); ++gFails; } \
     else { std::fprintf(stderr, "ok   %s\n", msg); } \
 } while (0)
+
+
+// --- synthetic NODES*.DAT builder -------------------------------------------
+// Small enough to reason about by hand: three vehicle nodes in a row where the
+// middle-to-right segment is one-way, a boat node, an emergency-only node, and
+// a two-node pedestrian path. Everything the loader has to get right - the
+// eighths-of-a-unit positions, the vehicle/pedestrian split, the flag bits and
+// the lane counts that encode one-way streets - is observable from it.
+namespace syn {
+
+void put16(std::vector<uint8_t>& b, uint16_t v) {
+    b.push_back(static_cast<uint8_t>(v & 0xFF));
+    b.push_back(static_cast<uint8_t>(v >> 8));
+}
+void put32(std::vector<uint8_t>& b, uint32_t v) {
+    for (int i = 0; i < 4; ++i) b.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFF));
+}
+void putPos(std::vector<uint8_t>& b, float v) {
+    put16(b, static_cast<uint16_t>(static_cast<int16_t>(v * 8.f)));
+}
+
+struct Node { float x, y, z; uint16_t linkId; uint8_t width, type; uint32_t flags; };
+struct Navi { float x, y; uint16_t tArea, tNode; int dx, dy; uint8_t left, right; };
+
+void writeNode(std::vector<uint8_t>& b, const Node& n) {
+    put32(b, 0);            // memory address, ignored
+    put32(b, 0);            // always zero
+    putPos(b, n.x); putPos(b, n.y); putPos(b, n.z);
+    put16(b, 0x7FFE);       // heuristic, constant in the stock files
+    put16(b, n.linkId);
+    put16(b, 0);            // area id
+    put16(b, 0);            // node id, overwritten below by the caller order
+    b.push_back(n.width);
+    b.push_back(n.type);
+    put32(b, n.flags);
+}
+
+void writeNavi(std::vector<uint8_t>& b, const Navi& v) {
+    putPos(b, v.x); putPos(b, v.y);
+    put16(b, v.tArea); put16(b, v.tNode);
+    b.push_back(static_cast<uint8_t>(static_cast<int8_t>(v.dx)));
+    b.push_back(static_cast<uint8_t>(static_cast<int8_t>(v.dy)));
+    put32(b, (static_cast<uint32_t>(v.left) << 8) | (static_cast<uint32_t>(v.right) << 11));
+}
+
+bool writeFile(const std::string& path, const std::vector<Node>& nodes, uint32_t vehCount,
+               const std::vector<Navi>& navis,
+               const std::vector<std::pair<uint16_t, uint16_t>>& links,
+               const std::vector<uint16_t>& naviLinks,
+               const std::vector<uint8_t>& linkLens) {
+    std::vector<uint8_t> b;
+    put32(b, static_cast<uint32_t>(nodes.size()));
+    put32(b, vehCount);
+    put32(b, static_cast<uint32_t>(nodes.size()) - vehCount);
+    put32(b, static_cast<uint32_t>(navis.size()));
+    put32(b, static_cast<uint32_t>(links.size()));
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        const size_t at = b.size();
+        writeNode(b, nodes[i]);
+        // node id must equal the local index; patch it in place.
+        b[at + 20] = static_cast<uint8_t>(i & 0xFF);
+        b[at + 21] = static_cast<uint8_t>(i >> 8);
+    }
+    for (const Navi& v : navis) writeNavi(b, v);
+    for (const auto& l : links) { put16(b, l.first); put16(b, l.second); }
+    for (int i = 0; i < 192; ++i) { b.push_back(0xFF); b.push_back(0xFF); b.push_back(0); b.push_back(0); }
+    for (const uint16_t v : naviLinks) put16(b, v);
+    for (const uint8_t v : linkLens) b.push_back(v);
+    b.insert(b.end(), links.size() + 384, 0); // trailer
+    std::FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) return false;
+    const bool ok = std::fwrite(b.data(), 1, b.size(), f) == b.size();
+    std::fclose(f);
+    return ok;
+}
+
+} // namespace syn
 
 int main() {
     // --- Phase 1: CADB roundtrip + test city ---
@@ -98,10 +180,6 @@ int main() {
     r = HandleQueryJson(R"({"type":"nope","id":7})", &world, &pf);
     CHECK(r.find("error") != std::string::npos, "unknown type errors");
 
-    if (gFails) {
-        std::fprintf(stderr, "\n%d FAILED\n", gFails);
-        return 1;
-    }
     // --- WorldManager: dynamic edits -------------------------------------
     {
         WorldManager wm;
@@ -152,6 +230,117 @@ int main() {
               "world manager: clearEdits restores the base mesh");
     }
 
+
+    // --- SA path files: NODES*.DAT loader --------------------------------
+    {
+        const std::string dir = "/tmp/wqs_sa_paths";
+        ::mkdir(dir.c_str(), 0777);
+
+        using syn::Node; using syn::Navi;
+        // flags carry the link count in bits 0-3.
+        const std::vector<Node> nodes = {
+            {   0.f,   0.f, 0.f, 0, 0, 1, 1u | (1u << 13)},  // 0 highway, ->1
+            {  80.f,   0.f, 0.f, 1, 0, 1, 2u},               // 1 ->0, ->2
+            { 160.f,   0.f, 0.f, 3, 0, 1, 1u},               // 2 ->1
+            {   0.f, -80.f, 0.f, 0, 0, 2, 0u | (1u << 7)},   // 3 boat, isolated
+            {  80.f, -80.f, 0.f, 0, 0, 1, 0u | (1u << 8)},   // 4 emergency, isolated
+            {   0.f,  80.f, 0.f, 4, 8, 0, 1u},               // 5 ped ->6
+            {  80.f,  80.f, 0.f, 5, 8, 0, 1u},               // 6 ped ->5
+        };
+        // Segment 0-1 is two-way (1 lane each way); segment 1-2 has lanes only
+        // in the navi direction, which points from node 2 back to node 1.
+        const std::vector<Navi> navis = {
+            { 40.f, 0.f, 0, 0, -100, 0, 1, 1},
+            {120.f, 0.f, 0, 1, -100, 0, 0, 1},
+        };
+        const std::vector<std::pair<uint16_t, uint16_t>> links = {
+            {0, 1}, {0, 0}, {0, 2}, {0, 1}, {0, 6}, {0, 5},
+        };
+        const std::vector<uint16_t> naviLinks = {0, 0, 1, 1, 0, 0};
+        const std::vector<uint8_t> linkLens = {80, 80, 80, 80, 80, 80};
+        CHECK(syn::writeFile(dir + "/NODES0.DAT", nodes, 5, navis, links, naviLinks, linkLens),
+              "sa paths: write synthetic area 0");
+        // Areas 1..62 exist but are empty; area 63 is absent on purpose, so
+        // the loader's tolerance for a missing file is exercised too.
+        bool emptyAreasOk = true;
+        for (int i = 1; i < 63; ++i)
+            emptyAreasOk &= syn::writeFile(dir + "/NODES" + std::to_string(i) + ".DAT",
+                                           {}, 0, {}, {}, {}, {});
+        CHECK(emptyAreasOk, "sa paths: write empty areas 1..62");
+        std::remove((dir + "/NODES63.DAT").c_str());
+
+        RoadNetwork veh, ped;
+        SaPathsStats st;
+        std::string perr;
+        CHECK(LoadSaPaths(dir, veh, ped, st, perr), "sa paths: load");
+        CHECK(st.areasLoaded == 63, "sa paths: absent area file tolerated");
+        CHECK(st.unresolved == 0, "sa paths: every link entry resolved");
+        CHECK(veh.nodeCount() == 5 && ped.nodeCount() == 2,
+              "sa paths: vehicle and pedestrian nodes land in separate graphs");
+        CHECK(std::fabs(veh.nodePos(1).x - 80.f) < 1e-4f &&
+              std::fabs(veh.nodePos(3).y + 80.f) < 1e-4f,
+              "sa paths: positions decode from eighths of a unit");
+        CHECK((veh.nodeInfo(0).flags & SaFlags::kHighway) != 0,
+              "sa paths: highway flag decoded");
+        CHECK((veh.nodeInfo(3).flags & SaFlags::kBoat) != 0 && veh.nodeInfo(3).type == 2,
+              "sa paths: boat node decoded");
+        CHECK((veh.nodeInfo(4).flags & SaFlags::kEmergency) != 0,
+              "sa paths: emergency flag decoded");
+        CHECK(ped.nodeInfo(0).type == 0,
+              "sa paths: pedestrian nodes carry no vehicle type");
+        CHECK(veh.hasLaneData() && !ped.hasLaneData(),
+              "sa paths: lane data on vehicles only");
+
+        // One-way: the lanes, not the link table, decide the legal direction.
+        const RouteProfile car = RouteProfile::Car();
+        CHECK(!veh.findPath({0.f, 0.f, 0.f}, {160.f, 0.f, 0.f}, car).success,
+              "sa paths: one-way segment refuses travel against its lanes");
+        const RoadNetwork::RouteResult back =
+            veh.findPath({160.f, 0.f, 0.f}, {0.f, 0.f, 0.f}, car);
+        CHECK(back.success && back.waypoints.size() == 3,
+              "sa paths: one-way segment passes with its lanes");
+        CHECK(back.lanes.size() == 2 && back.lanes[0] == 1 && back.lanes[1] == 1,
+              "sa paths: lane count reported per leg");
+        RouteProfile ignoreOneWay = car;
+        ignoreOneWay.respectOneWay = false;
+        CHECK(veh.findPath({0.f, 0.f, 0.f}, {160.f, 0.f, 0.f}, ignoreOneWay).success,
+              "sa paths: one-way can be waived per query");
+
+        // Node classes gate which network a query snaps to.
+        CHECK(veh.nearestNode({0.f, -80.f, 0.f}, car) != 3,
+              "sa paths: a car never snaps to the boat network");
+        CHECK(veh.nearestNode({0.f, -80.f, 0.f}, RouteProfile::Boat()) == 3,
+              "sa paths: a boat snaps to the boat network");
+        CHECK(veh.nearestNode({80.f, -80.f, 0.f}, car) == 4,
+              "sa paths: emergency nodes are usable by default");
+        RouteProfile civilian = car;
+        civilian.allowEmergency = false;
+        CHECK(veh.nearestNode({80.f, -80.f, 0.f}, civilian) != 4,
+              "sa paths: emergency nodes excluded on request");
+
+        const RoadNetwork::RouteResult walk =
+            ped.findPath({0.f, 80.f, 0.f}, {80.f, 80.f, 0.f}, RouteProfile::Ped());
+        CHECK(walk.success && walk.waypoints.size() == 2,
+              "sa paths: pedestrian graph routes on its own");
+        // Vehicle graph under the car profile: {0,1,2} plus the lone emergency
+        // node, with the boat node filtered out entirely.
+        CHECK(veh.componentSizes(car).size() == 2,
+              "sa paths: component sizes computed per profile");
+
+        // A short refusal path: a truncated file must fail, not read garbage.
+        std::FILE* trunc = std::fopen((dir + "/NODES5.DAT").c_str(), "wb");
+        if (trunc) { std::fputs("nope", trunc); std::fclose(trunc); }
+        RoadNetwork v2, p2;
+        SaPathsStats st2;
+        std::string e2;
+        CHECK(LoadSaPaths(dir, v2, p2, st2, e2) && st2.areasLoaded == 62,
+              "sa paths: a corrupt area is skipped, the rest still load");
+    }
+
+    if (gFails) {
+        std::fprintf(stderr, "\n%d FAILED\n", gFails);
+        return 1;
+    }
     std::fprintf(stderr, "\nall tests passed\n");
     return 0;
 }

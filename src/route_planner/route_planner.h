@@ -23,12 +23,24 @@ namespace RoutePlanner {
 struct HybridResult {
     bool success = false;
     std::vector<Vec3> waypoints; // GTA coords, start to goal
+    // True when the route came from the pedestrian node graph rather than the
+    // road graph, i.e. it follows sidewalks instead of road centre lines.
+    bool onSidewalks = false;
 };
 
+// Routes on the pedestrian graph when it can reach the goal and falls back to
+// the road graph when it cannot. That split is not a heuristic: SA's own
+// pedestrian network is excellent inside a city but breaks into 179
+// components, the three largest being Los Santos (8,880 nodes), San Fierro
+// (8,332) and Las Venturas (7,567) - it simply has no sidewalk between
+// cities. The road graph is one connected component, so it is what carries an
+// inter-city walk. Either graph may be null.
+//
 // minSpacing is the waypoint spacing in world units (pedestrian pace, not
 // vehicle turn points). The collision world is optional; without it waypoints
 // keep the node z coordinates.
-HybridResult ComposeHybridRoute(const RoadNetwork& roads,
+HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
+                                const RoadNetwork* vehRoads,
                                 const CollisionWorld* world,
                                 const Vec3& from, const Vec3& to,
                                 float minSpacing = 25.f);
