@@ -56,7 +56,9 @@ void RoadNetwork::clear() {
     nodes_.clear();
     idToIndex_.clear();
     grid_.clear();
+    component_.clear();
     connections_ = 0;
+    componentCount_ = 0;
     hasLaneData_ = false;
 }
 
@@ -84,6 +86,38 @@ void RoadNetwork::finishBuild() {
         const int cx = static_cast<int>(std::floor(nodes_[i].pos.x / kCell));
         const int cy = static_cast<int>(std::floor(nodes_[i].pos.y / kCell));
         grid_[cellKey(cx, cy)].push_back(i);
+    }
+    labelComponents();
+}
+
+void RoadNetwork::labelComponents() {
+    const size_t n = nodes_.size();
+    component_.assign(n, -1);
+    componentCount_ = 0;
+    // Undirected view: one-way streets do not disconnect anything, they only
+    // constrain which way a vehicle may travel.
+    std::vector<std::vector<int>> und(n);
+    for (size_t u = 0; u < n; ++u)
+        for (const Edge& e : nodes_[u].adj) {
+            und[u].push_back(e.to);
+            und[static_cast<size_t>(e.to)].push_back(static_cast<int>(u));
+        }
+    std::vector<int> stack;
+    for (size_t s = 0; s < n; ++s) {
+        if (component_[s] >= 0) continue;
+        const int id = static_cast<int>(componentCount_++);
+        stack.clear();
+        stack.push_back(static_cast<int>(s));
+        component_[s] = id;
+        while (!stack.empty()) {
+            const int u = stack.back();
+            stack.pop_back();
+            for (const int v : und[static_cast<size_t>(u)])
+                if (component_[static_cast<size_t>(v)] < 0) {
+                    component_[static_cast<size_t>(v)] = id;
+                    stack.push_back(v);
+                }
+        }
     }
 }
 

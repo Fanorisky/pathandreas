@@ -1,5 +1,6 @@
 #include "route_planner/route_planner.h"
 #include "collision_world/collision_world.h"
+#include "pathfinder/pathfinder.h"
 #include "road_network/road_network.h"
 
 #include <algorithm>
@@ -24,54 +25,179 @@ Vec3 groundSnap(const CollisionWorld* world, const Vec3& p) {
     return p;
 }
 
+// Replace the head and tail of a road corridor with sidewalk routes. The
+// handover points are found by component identity rather than by search: the
+// first corridor point whose nearest sidewalk node shares a component with the
+// goal, and the last one before it that shares a component with the start.
+// A corridor point out in the countryside would otherwise "belong" to whatever
+// city's sidewalk node happens to be nearest, so a handover only counts when a
+// sidewalk node is actually alongside the road there.
+std::vector<Vec3> stitchSidewalkLegs(const RoadNetwork& ped,
+                                     const std::vector<Vec3>& corridor,
+                                     const Vec3& from, const Vec3& to,
+                                     HybridResult& out) {
+    constexpr float kHandoverRadius = 30.f;
+    const RouteProfile pp = RouteProfile::Ped();
+    const long startNode = ped.nearestNode(from, pp);
+    const long goalNode = ped.nearestNode(to, pp);
+    if (startNode < 0 || goalNode < 0) return corridor;
+    const int startComp = ped.componentId(startNode);
+    const int goalComp = ped.componentId(goalNode);
+    // Same component means step 1 already routed it on sidewalks; different
+    // components are what this function exists for.
+    if (startComp < 0 || goalComp < 0 || startComp == goalComp) return corridor;
+
+    auto sidewalkComp = [&](const Vec3& p) {
+        const long n = ped.nearestNode(p, pp);
+        if (n < 0) return -1;
+        if ((ped.nodePos(n) - p).length() > kHandoverRadius) return -1;
+        return ped.componentId(n);
+    };
+
+    long firstGoal = -1;
+    for (size_t i = 0; i < corridor.size(); ++i)
+        if (sidewalkComp(corridor[i]) == goalComp) { firstGoal = static_cast<long>(i); break; }
+    if (firstGoal < 0) return corridor;
+    long lastStart = -1;
+    for (long i = 0; i < firstGoal; ++i)
+        if (sidewalkComp(corridor[static_cast<size_t>(i)]) == startComp) lastStart = i;
+    if (lastStart < 0) return corridor;
+
+    const RoadNetwork::RouteResult head =
+        ped.findPath(from, corridor[static_cast<size_t>(lastStart)], pp);
+    const RoadNetwork::RouteResult tail =
+        ped.findPath(corridor[static_cast<size_t>(firstGoal)], to, pp);
+    if (!head.success || !tail.success) return corridor;
+
+    std::vector<Vec3> merged;
+    merged.reserve(head.waypoints.size() + static_cast<size_t>(firstGoal - lastStart + 1) +
+                   tail.waypoints.size());
+    for (const Vec3& v : head.waypoints) merged.push_back(v);
+    // The road stretch between the two cities, inclusive of both handover
+    // points so the jump from sidewalk to carriageway is an explicit step.
+    for (long i = lastStart; i <= firstGoal; ++i) merged.push_back(corridor[static_cast<size_t>(i)]);
+    for (const Vec3& v : tail.waypoints) merged.push_back(v);
+    out.source = HybridResult::SourceStitched;
+    return merged;
+}
+
 } // namespace
 
 HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
                                 const RoadNetwork* vehRoads,
                                 const CollisionWorld* world,
+                                const Pathfinder* navmesh,
                                 const Vec3& from, const Vec3& to,
                                 float minSpacing) {
     HybridResult out;
 
-    // Sidewalks first. Inside a city this is the whole answer, and it is the
-    // difference between a pedestrian on the pavement and one walking up the
-    // middle of the road, which is what routing a person on the vehicle graph
-    // produces.
-    RoadNetwork::RouteResult route;
+    // 1. Sidewalks alone. Inside a city this is the whole answer, and it is
+    //    the difference between a pedestrian on the pavement and one walking
+    //    up the middle of the road.
+    std::vector<Vec3> nodes;
     if (pedRoads && pedRoads->ready()) {
-        route = pedRoads->findPath(from, to, RouteProfile::Ped());
-        if (route.success && !route.waypoints.empty()) out.onSidewalks = true;
-    }
-    if (!out.onSidewalks) {
-        if (!vehRoads || !vehRoads->ready()) return out;
-        route = vehRoads->findPath(from, to, RouteProfile::Ped());
-        if (!route.success || route.waypoints.empty()) return out;
+        RoadNetwork::RouteResult r = pedRoads->findPath(from, to, RouteProfile::Ped());
+        if (r.success && !r.waypoints.empty()) {
+            nodes = std::move(r.waypoints);
+            out.source = HybridResult::SourcePed;
+        }
     }
 
-    // Backbone: node route downsampled to pedestrian pace. The first node is
-    // kept even if it is closer than minSpacing to `from` - walking toward it
-    // first is what gets a pedestrian off an off-graph start. The last node is
+    // 2. The sidewalk network stops at the city limits, so hand over to the
+    //    road graph for the stretch between cities and hand back on arrival.
+    if (out.source == HybridResult::SourceNone && vehRoads && vehRoads->ready()) {
+        RoadNetwork::RouteResult corridor = vehRoads->findPath(from, to, RouteProfile::Ped());
+        if (corridor.success && !corridor.waypoints.empty()) {
+            out.source = HybridResult::SourceVehicle;
+            nodes = (pedRoads && pedRoads->ready())
+                        ? stitchSidewalkLegs(*pedRoads, corridor.waypoints, from, to, out)
+                        : std::move(corridor.waypoints);
+        }
+    }
+    if (out.source == HybridResult::SourceNone) return out;
+
+    // Backbone: the node route downsampled to pedestrian pace. The first node
+    // is kept even when it is closer than minSpacing to `from` - walking to it
+    // is what gets a pedestrian off an off-network start - and the last is
     // always kept so the tail stays on the network before the final approach.
     std::vector<Vec3> backbone;
-    backbone.reserve(route.waypoints.size() + 2);
-    backbone.push_back(groundSnap(world, from));
+    backbone.reserve(nodes.size() + 2);
+    // Two backbone points at the same place are one place: appending both
+    // would create a segment nothing can verify - typically a purely vertical
+    // one, where a node's own height and the ground-snapped height of the same
+    // spot differ - and it would then be counted as an unconfirmed stretch of
+    // route when it is not a stretch of route at all. Compare horizontally and
+    // keep the newer point, which for the final push is the caller's exact
+    // position rather than the node beside it.
+    constexpr float kSamePlace = 1.5f;
+    auto pushUnique = [&backbone](const Vec3& v) {
+        if (!backbone.empty()) {
+            const Vec3& b = backbone.back();
+            const float dx = v.x - b.x, dy = v.y - b.y;
+            if (dx * dx + dy * dy < kSamePlace * kSamePlace) {
+                backbone.back() = v;
+                return;
+            }
+        }
+        backbone.push_back(v);
+    };
+    pushUnique(groundSnap(world, from));
     Vec3 last = from;
-    for (size_t i = 0; i < route.waypoints.size(); ++i) {
-        const Vec3& node = route.waypoints[i];
-        const bool isLast = i + 1 == route.waypoints.size();
-        if (!isLast && (node - last).lengthSq() < minSpacing * minSpacing) continue;
-        backbone.push_back(node);
-        last = node;
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        const bool isLast = i + 1 == nodes.size();
+        if (!isLast && (nodes[i] - last).lengthSq() < minSpacing * minSpacing) continue;
+        pushUnique(nodes[i]);
+        last = nodes[i];
     }
-    backbone.push_back(groundSnap(world, to));
-
-    // Ground-snap every intermediate node so the z stays truthful, but leave
-    // the downsampled spacing alone - the consumer walks this with
-    // move_along_surface and needs course corrections, not a dense polyline.
+    pushUnique(groundSnap(world, to));
     for (size_t i = 1; i + 1 < backbone.size(); ++i)
         backbone[i] = groundSnap(world, backbone[i]);
 
-    out.waypoints = std::move(backbone);
+    if (!navmesh || !navmesh->ready() || backbone.size() < 2) {
+        out.straightSegments = backbone.size() > 1
+                                   ? static_cast<long>(backbone.size()) - 1 : 0;
+        out.waypoints = std::move(backbone);
+        out.success = true;
+        return out;
+    }
+
+    // 3. Each straight hop between backbone points replaced by a route the
+    //    navmesh knows is walkable. A mesh detour far longer than the hop means
+    //    the backbone and the mesh disagree about this stretch; the node graph
+    //    is the more trustworthy of the two for macro connectivity, so keep the
+    //    straight line there rather than bolting on a large loop, and let the
+    //    consumer's recovery mode handle it as before.
+    constexpr float kMaxDetour = 6.f;
+    std::vector<Vec3> pts;
+    pts.push_back(backbone.front());
+    for (size_t i = 1; i < backbone.size(); ++i) {
+        const Vec3& a = backbone[i - 1];
+        const Vec3& b = backbone[i];
+        const PathResult leg = navmesh->FindPath(a, b, world);
+        bool repaired = false;
+        if (leg.success && !leg.partial && leg.waypoints.size() >= 2) {
+            float len = 0.f;
+            for (size_t k = 1; k < leg.waypoints.size(); ++k)
+                len += (leg.waypoints[k] - leg.waypoints[k - 1]).length();
+            const float direct = (b - a).length();
+            if (len <= std::max(direct * kMaxDetour, minSpacing)) {
+                // waypoints[0] is the mesh's snap of `a`, already in `pts`.
+                for (size_t k = 1; k < leg.waypoints.size(); ++k)
+                    pts.push_back(leg.waypoints[k]);
+                repaired = true;
+            }
+        }
+        if (repaired) ++out.repairedSegments;
+        else {
+            pts.push_back(b);
+            ++out.straightSegments;
+        }
+    }
+    // A repaired last segment ends on the mesh's snap of the goal; the contract
+    // is that the final waypoint is the caller's own position.
+    if ((pts.back() - backbone.back()).length() > 0.5f) pts.push_back(backbone.back());
+
+    out.waypoints = std::move(pts);
     out.success = true;
     return out;
 }

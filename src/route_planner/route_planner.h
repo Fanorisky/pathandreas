@@ -6,6 +6,7 @@
 namespace wqs {
 
 class CollisionWorld;
+class Pathfinder;
 class RoadNetwork;
 
 // Composed long-distance walking routes: the traffic node graph picks the
@@ -23,25 +24,41 @@ namespace RoutePlanner {
 struct HybridResult {
     bool success = false;
     std::vector<Vec3> waypoints; // GTA coords, start to goal
-    // True when the route came from the pedestrian node graph rather than the
-    // road graph, i.e. it follows sidewalks instead of road centre lines.
-    bool onSidewalks = false;
+    // Which network carried the route. Stitched means both: sidewalks through
+    // each city and the road graph only across the gap between them.
+    enum Source { SourceNone, SourcePed, SourceVehicle, SourceStitched };
+    Source source = SourceNone;
+    // How the straight hops between backbone waypoints turned out when the
+    // navmesh was available to check them. A repaired segment is one the
+    // navmesh replaced with a route it knows is walkable; a straight one is a
+    // segment it could not confirm, which is where a consumer still needs its
+    // recovery mode.
+    long repairedSegments = 0;
+    long straightSegments = 0;
 };
 
-// Routes on the pedestrian graph when it can reach the goal and falls back to
-// the road graph when it cannot. That split is not a heuristic: SA's own
-// pedestrian network is excellent inside a city but breaks into 179
-// components, the three largest being Los Santos (8,880 nodes), San Fierro
-// (8,332) and Las Venturas (7,567) - it simply has no sidewalk between
-// cities. The road graph is one connected component, so it is what carries an
-// inter-city walk. Either graph may be null.
+// Combines the two backends instead of choosing between them, because they
+// fail in opposite places. SA's pedestrian node network is dense and complete
+// inside a city but breaks into 179 components - Los Santos 8,880 nodes,
+// San Fierro 8,332, Las Venturas 7,567 - since vanilla SA has no sidewalk
+// between cities. The road graph is one connected component but its nodes are
+// road centre lines. The navmesh reaches anywhere there is geometry but its
+// largest walkable component is only ~20.8% of the mesh.
 //
-// minSpacing is the waypoint spacing in world units (pedestrian pace, not
-// vehicle turn points). The collision world is optional; without it waypoints
-// keep the node z coordinates.
+// So: sidewalks wherever the pedestrian graph reaches, the road graph only for
+// the stretch between the component the start is in and the one the goal is
+// in, and - when `navmesh` is given - each straight hop between backbone
+// waypoints replaced by a navmesh route that is known to be walkable, falling
+// back to the straight line when the navmesh cannot confirm one. Any of
+// pedRoads, vehRoads, world and navmesh may be null; the result degrades
+// rather than failing.
+//
+// minSpacing is the backbone waypoint spacing in world units (pedestrian pace,
+// not vehicle turn points).
 HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
                                 const RoadNetwork* vehRoads,
                                 const CollisionWorld* world,
+                                const Pathfinder* navmesh,
                                 const Vec3& from, const Vec3& to,
                                 float minSpacing = 25.f);
 

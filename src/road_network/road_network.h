@@ -112,6 +112,19 @@ public:
     RouteResult findPath(const Vec3& from, const Vec3& to,
                          const RouteProfile& profile = {}) const;
 
+    // Which connected component a node belongs to, over the undirected and
+    // unfiltered view of the graph, or -1 for an invalid index. Labelled once
+    // by finishBuild(). This is what lets a route tell "can I walk from here
+    // to there at all" apart from "is it far" without running a search: the
+    // pedestrian graph has 179 components and answering that per corridor
+    // point is how a walk hands over between the sidewalk network and the road
+    // network.
+    int componentId(long node) const {
+        return (node < 0 || node >= static_cast<long>(component_.size()))
+                   ? -1 : component_[static_cast<size_t>(node)];
+    }
+    long componentCount() const { return componentCount_; }
+
     // Connected-component sizes over the undirected view, largest first.
     // Diagnostic: it is how the three-city split of the pedestrian graph and
     // the separate boat network were found.
@@ -131,10 +144,14 @@ private:
     bool accepts(const Node& n, const RouteProfile& p) const;
     float costMul(const Node& n, const RouteProfile& p) const;
 
+    void labelComponents();
+
     std::vector<Node> nodes_;
     std::unordered_map<long, int> idToIndex_; // GPS.dat node id -> dense index
     long connections_ = 0;
     bool hasLaneData_ = false;
+    std::vector<int> component_;   // per node, filled by finishBuild()
+    long componentCount_ = 0;
 
     static constexpr float kCell = 200.f;
     std::unordered_map<uint64_t, std::vector<int>> grid_;

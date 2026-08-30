@@ -144,28 +144,62 @@ requests on that socket run on a thread pool.
 waypoints lead only part of the way (Detour partial result). Treat it as
 "no route", not as a route.
 
-**hybrid path** (walking; node-graph corridor + grounded waypoints)
+**hybrid path** (walking; all three backends combined)
 ```json
 {"type":"find_hybrid_path","id":"req-5","from":[x,y,z],"to":[x,y,z]}
-{"type":"find_hybrid_path_result","id":"req-5","success":true,"graph":"ped",
- "waypoints":[[x,y,z],...]}
+{"type":"find_hybrid_path_result","id":"req-5","success":true,
+ "graph":"ped+vehicle","waypoints":[[x,y,z],...],
+ "repaired_segments":246,"straight_segments":2}
 ```
-Pedestrian routing that stays connected where the navmesh fragments. With
-`--paths` it uses the game's **pedestrian** node graph, so the route follows
-sidewalks: at Grove Street the nearest pedestrian node is 1.4 units away
-where the nearest road node is 10.7 units out in the carriageway. That graph
-is per-city, so when the goal is in another city the route falls back to the
-road graph and `graph` says `"vehicle"` - honest signal that those waypoints
-are road centre lines. Every waypoint is ground-snapped at ~25-unit spacing;
-waypoint 0 and the last are your exact endpoint positions.
+The three backends fail in opposite places, so this combines them rather than
+picking one. The **pedestrian node graph** is dense and complete inside a city
+but splits per city; the **road graph** is one connected component but its
+nodes are carriageway centre lines; the **navmesh** reaches anywhere there is
+geometry but only ~20.8% of it is one walkable component.
 
-Semantics: a guaranteed graph-following route to the node nearest the goal -
-not exact reachability; the final approach into an off-graph goal is the
-consumer's business. Pair with move_along_surface per tick; when a tick stops
-making progress (navmesh gap), switch to direct movement + find_ground_z
-until the next waypoint - verified end to end: a simulated pedestrian walked
-Grove Street -> San Fierro (7,005 units, 2,813 movement ticks, 0.7% recovery
-ticks) arriving 0.2 units from the goal.
+1. Sidewalks wherever the pedestrian graph reaches. At Grove Street its
+   nearest node is 1.4 units away where the nearest road node is 10.7 units
+   out in the road.
+2. The road graph only for the stretch between the component the start is in
+   and the one the goal is in. Handover happens where a sidewalk node is
+   actually within 30 units of the corridor, so the route does not "hand over"
+   in open countryside.
+3. Each hop between backbone waypoints replaced by a navmesh route known to be
+   walkable, keeping the straight line where the navmesh cannot confirm one -
+   or where its detour would be more than 6x the hop, which means the two
+   backends disagree and the node graph is the one to trust for connectivity.
+
+`graph` reports which networks carried it: `"ped"`, `"vehicle"` or
+`"ped+vehicle"`. `straight_segments` is the number of hops nothing confirmed,
+and it is the only number that matters for a controller - that is where a
+recovery mode is still needed. Measured on the full map:
+
+| route | backbone | confirmed | unverified hops | max waypoint gap |
+|---|---|---|---|---|
+| Grove -> Idlewood | 19 wp | 169 wp | 0 of 18 | 44.9u -> 25.9u |
+| Grove -> Pershing Sq | 61 wp | 589 wp | 0 of 60 | 44.9u -> 26.3u |
+| Grove -> San Fierro | 249 wp | 2,080 wp | 2 of 248 | 72.7u -> 38.7u |
+| Grove -> Las Venturas | 126 wp | 1,099 wp | 3 of 125 | 73.3u -> 49.3u |
+| San Fierro -> Las Venturas | 318 wp | 2,588 wp | 7 of 317 | 95.3u -> 77.3u |
+
+Confirmation costs a navmesh query per hop: 4-10 ms inside a city, 60-115 ms
+across the map, against 3-12 ms without. `"repair": false` returns the sparse
+backbone instead, at roughly `minSpacing` (25 unit) waypoint spacing; a
+confirmed route is denser than that, since it carries the navmesh's own corner
+points. A large gap in a confirmed route is not necessarily unverified - a
+straight run across open walkable ground is one waypoint to the next - so read
+`straight_segments`, not the spacing.
+
+Waypoint 0 and the last are your exact endpoint positions. Semantics
+otherwise: a graph-following route to the node nearest the goal, not exact
+reachability - the final approach into an off-graph goal is the consumer's
+business. Pair with move_along_surface per tick; when a tick stops making
+progress, switch to direct movement + find_ground_z until the next waypoint.
+That was verified end to end before confirmation existed (a simulated
+pedestrian walked Grove Street -> San Fierro, 7,005 units, 2,813 ticks, 0.7%
+recovery ticks, arriving 0.2 units from the goal); with confirmation the same
+route leaves 2 of 248 hops unchecked, so recovery is now a safety net for a
+named handful of stretches rather than for anywhere the mesh happens to break.
 
 **vehicle path** (road network)
 ```json

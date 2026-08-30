@@ -421,6 +421,79 @@ int main() {
               "vehicle: no fit report unless a vehicle is given");
     }
 
+
+    // --- hybrid walking: sidewalk graph + road bridge + navmesh repair -----
+    {
+        using RoutePlanner::HybridResult;
+        // Two sidewalk islands 360 units apart, the way SA's pedestrian graph
+        // splits between cities, and a road graph that spans the gap.
+        RoadNetwork sidewalks;
+        const int a0 = sidewalks.addNode({0.f, 0.f, 0.f});
+        const int a1 = sidewalks.addNode({40.f, 0.f, 0.f});
+        const int b0 = sidewalks.addNode({400.f, 0.f, 0.f});
+        const int b1 = sidewalks.addNode({440.f, 0.f, 0.f});
+        sidewalks.addEdge(a0, a1, 40.f); sidewalks.addEdge(a1, a0, 40.f);
+        sidewalks.addEdge(b0, b1, 40.f); sidewalks.addEdge(b1, b0, 40.f);
+        sidewalks.finishBuild();
+        CHECK(sidewalks.componentCount() == 2 &&
+              sidewalks.componentId(a0) == sidewalks.componentId(a1) &&
+              sidewalks.componentId(a0) != sidewalks.componentId(b0),
+              "hybrid: sidewalk islands are labelled as separate components");
+
+        RoadNetwork roadsOnly;
+        int prev = -1;
+        for (int x = 0; x <= 440; x += 40) {
+            const int n = roadsOnly.addNode({static_cast<float>(x), 0.f, 0.f});
+            if (prev >= 0) { roadsOnly.addEdge(prev, n, 40.f); roadsOnly.addEdge(n, prev, 40.f); }
+            prev = n;
+        }
+        roadsOnly.finishBuild();
+
+        const Vec3 walkFrom{0.f, 0.f, 0.f}, walkTo{440.f, 0.f, 0.f};
+        // Sidewalks alone cannot span the gap.
+        CHECK(!RoutePlanner::ComposeHybridRoute(&sidewalks, nullptr, nullptr, nullptr,
+                                                walkFrom, walkTo).success,
+              "hybrid: sidewalks alone cannot cross the gap");
+        // The road graph alone can, on road centre lines.
+        const HybridResult roadOnly = RoutePlanner::ComposeHybridRoute(
+            nullptr, &roadsOnly, nullptr, nullptr, walkFrom, walkTo);
+        CHECK(roadOnly.success && roadOnly.source == HybridResult::SourceVehicle,
+              "hybrid: road graph alone carries the walk");
+        // Both: sidewalks at each end, road only for the stretch between.
+        const HybridResult both = RoutePlanner::ComposeHybridRoute(
+            &sidewalks, &roadsOnly, nullptr, nullptr, walkFrom, walkTo);
+        CHECK(both.success && both.source == HybridResult::SourceStitched,
+              "hybrid: sidewalks and road graph are stitched, not swapped");
+        CHECK(!both.waypoints.empty() &&
+              (both.waypoints.front() - walkFrom).length() < 1.f &&
+              (both.waypoints.back() - walkTo).length() < 1.f,
+              "hybrid: stitched route keeps the exact endpoints");
+        CHECK(both.repairedSegments == 0 &&
+              both.straightSegments == static_cast<long>(both.waypoints.size()) - 1,
+              "hybrid: without a navmesh every segment is unverified");
+
+        // Repair: on ground the navmesh knows, every hop should come back as a
+        // route it confirmed rather than an unchecked straight line.
+        RoadNetwork strip;
+        const int s0 = strip.addNode({-10.f, -12.f, 1.f});
+        const int s1 = strip.addNode({10.f, -12.f, 1.f});
+        strip.addEdge(s0, s1, 20.f); strip.addEdge(s1, s0, 20.f);
+        strip.finishBuild();
+        const Vec3 sFrom{-10.f, -12.f, 1.f}, sTo{10.f, -12.f, 1.f};
+        const HybridResult raw = RoutePlanner::ComposeHybridRoute(
+            &strip, nullptr, &world, nullptr, sFrom, sTo, 5.f);
+        const HybridResult fixed = RoutePlanner::ComposeHybridRoute(
+            &strip, nullptr, &world, &pf, sFrom, sTo, 5.f);
+        CHECK(raw.success && fixed.success && raw.source == HybridResult::SourcePed,
+              "hybrid: sidewalk-only route succeeds either way");
+        CHECK(fixed.repairedSegments > 0 && fixed.straightSegments == 0,
+              "hybrid: the navmesh confirms every hop on open ground");
+        CHECK(fixed.waypoints.size() > raw.waypoints.size(),
+              "hybrid: a confirmed route is denser than the backbone it came from");
+        CHECK((fixed.waypoints.back() - raw.waypoints.back()).length() < 1.f,
+              "hybrid: repair still ends at the caller's position");
+    }
+
     if (gFails) {
         std::fprintf(stderr, "\n%d FAILED\n", gFails);
         return 1;

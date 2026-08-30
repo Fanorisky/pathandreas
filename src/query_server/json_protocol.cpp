@@ -195,13 +195,27 @@ std::string HandleQueryJson(const std::string& request,
         // stay connected where the navmesh fragments. Prefers the pedestrian
         // graph (sidewalks) and falls back to the road graph, which is the
         // only one that spans cities.
+        // "repair": false skips asking the navmesh to confirm each hop, for a
+        // caller that would rather have the answer sooner than validated.
+        const Pathfinder* mesh = req.value("repair", true) ? pathfinder : nullptr;
         RoutePlanner::HybridResult r =
-            RoutePlanner::ComposeHybridRoute(pedRoads, roads, world, from, to);
+            RoutePlanner::ComposeHybridRoute(pedRoads, roads, world, mesh, from, to);
         json wps = json::array();
         for (const auto& v : r.waypoints) wps.push_back(vecArr(v));
+        const char* src = "none";
+        switch (r.source) {
+            case RoutePlanner::HybridResult::SourcePed: src = "ped"; break;
+            case RoutePlanner::HybridResult::SourceVehicle: src = "vehicle"; break;
+            case RoutePlanner::HybridResult::SourceStitched: src = "ped+vehicle"; break;
+            default: break;
+        }
         return json{{"type", "find_hybrid_path_result"}, {"id", id},
                     {"success", r.success}, {"waypoints", wps},
-                    {"graph", r.onSidewalks ? "ped" : "vehicle"}}.dump();
+                    {"graph", src},
+                    // How much of the route the navmesh confirmed as walkable.
+                    // straight segments are where recovery mode is still needed.
+                    {"repaired_segments", r.repairedSegments},
+                    {"straight_segments", r.straightSegments}}.dump();
     }
 
     if (type == "find_boat_path") {
