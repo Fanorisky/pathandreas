@@ -30,6 +30,7 @@ WQS_SRC := \
     src/pathfinder/pathfinder.cpp \
     src/road_network/road_network.cpp \
     src/route_planner/route_planner.cpp \
+    src/world_manager/world_manager.cpp \
     src/query_server/json_protocol.cpp \
     src/query_server/query_server.cpp
 

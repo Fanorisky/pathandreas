@@ -3,6 +3,7 @@
 #include "navmesh_builder/navmesh_builder.h"
 #include "pathfinder/pathfinder.h"
 #include "query_server/json_protocol.h"
+#include "world_manager/world_manager.h"
 #include "common/log.h"
 
 #include <cstdio>
@@ -101,6 +102,56 @@ int main() {
         std::fprintf(stderr, "\n%d FAILED\n", gFails);
         return 1;
     }
+    // --- WorldManager: dynamic edits -------------------------------------
+    {
+        WorldManager wm;
+        // Build a manager over the synthetic city by writing/loading a cadb.
+        CadbDatabase cityDb = MakeTestCity();
+        std::string tmpCadb = "/tmp/wqs_wm_test.cadb";
+        std::string werr;
+        CHECK(WriteCadbFile(tmpCadb, cityDb, werr), "world manager: write test cadb");
+        CHECK(wm.loadCadb(tmpCadb, werr), "world manager: load cadb");
+
+        const CollisionMesh base = wm.assembleEdited();
+        const uint32_t baseTris = base.triangleCount();
+        CHECK(baseTris > 0, "world manager: base mesh assembles");
+
+        // No edits -> assembleEdited equals the plain assembly.
+        CHECK(wm.removeEditCount() == 0 && wm.addEditCount() == 0,
+              "world manager: starts with no edits");
+
+        // Remove every model-2 building storey near the origin.
+        const size_t matching = wm.countMatching(2, {0.f, 0.f, 0.f}, 60.f);
+        CHECK(matching > 0, "world manager: removal preview finds placements");
+        wm.removeBuilding(2, {0.f, 0.f, 0.f}, 60.f);
+        CollisionMesh edited = wm.assembleEdited();
+        CHECK(edited.triangleCount() < baseTris,
+              "world manager: removal shrinks the mesh");
+        CHECK(edited.triangleCount() > 0, "world manager: removal keeps the world");
+
+        // Add an object with stock model 8 (wall) somewhere fresh.
+        std::string aerr;
+        CHECK(wm.addObject(8, {50.f, 50.f, 0.f}, Quat{}, aerr),
+              "world manager: add object with known model");
+        CHECK(!wm.addObject(9999, {0.f, 0.f, 0.f}, Quat{}, aerr),
+              "world manager: unknown model id rejected");
+        edited = wm.assembleEdited();
+        CHECK(edited.triangleCount() > 0, "world manager: add+remove assembles");
+
+        // Euler -> quaternion sanity: identity and 90-degree Z.
+        const Quat ident = EulerDegreesToQuat({0.f, 0.f, 0.f});
+        CHECK(std::fabs(ident.w - 1.f) < 1e-5f, "euler: identity quaternion");
+        const Quat qz = EulerDegreesToQuat({0.f, 0.f, 90.f});
+        const Vec3 rx = rotate(qz, {1.f, 0.f, 0.f});
+        CHECK(std::fabs(rx.y - 1.f) < 1e-4f && std::fabs(rx.x) < 1e-4f,
+              "euler: 90 deg Z maps +X to +Y");
+
+        // Clearing edits restores the original mesh size.
+        wm.clearEdits();
+        CHECK(wm.assembleEdited().triangleCount() == baseTris,
+              "world manager: clearEdits restores the base mesh");
+    }
+
     std::fprintf(stderr, "\nall tests passed\n");
     return 0;
 }
