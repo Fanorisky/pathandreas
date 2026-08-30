@@ -1,4 +1,5 @@
 #include "query_server/query_server.h"
+#include <shared_mutex>
 #include "query_server/json_protocol.h"
 #include "query_server/sha1.h"
 #include "common/log.h"
@@ -122,8 +123,16 @@ std::string wsDecode(std::string& buf, bool& closed, bool& needMore, bool& isPin
     return payload;
 }
 
-void handleClient(int fd, CollisionWorld* world, Pathfinder* pathfinder,
-                   RoadNetwork* roads, Pathfinder* vehiclePathfinder, ThreadPool& pool) {
+// Every request reads the backends under a shared lock, so an in-flight query
+// always completes on the world it started with; a world commit takes the
+// exclusive lock only to swap the pointers (see WorldCommitter).
+std::string answer(const std::string& request, Backends& b, WorldEditor* editor) {
+    std::shared_lock<std::shared_mutex> lk(b.mu);
+    return HandleQueryJson(request, b.world.get(), b.pathfinder.get(), b.roads,
+                           b.vehiclePathfinder.get(), editor);
+}
+
+void handleClient(int fd, Backends& backends, WorldEditor* editor, ThreadPool& pool) {
     struct Conn {
         int fd = -1;
         std::mutex writeMu;
@@ -183,7 +192,7 @@ void handleClient(int fd, CollisionWorld* world, Pathfinder* pathfinder,
             } else {
                 std::string body, ctype = "text/plain; charset=utf-8";
                 if (headers.rfind("GET /health", 0) == 0 || headers.rfind("GET /health ", 0) == 0) {
-                    body = HandleQueryJson("{\"type\":\"status\",\"id\":\"health\"}", world, pathfinder, roads, vehiclePathfinder);
+                    body = answer("{\"type\":\"status\",\"id\":\"health\"}", backends, editor);
                     ctype = "application/json";
                 } else if (headers.rfind("POST /query", 0) == 0 || headers.rfind("POST /query ", 0) == 0) {
                     // The body may not have arrived yet when the headers are complete -
@@ -209,12 +218,14 @@ void handleClient(int fd, CollisionWorld* world, Pathfinder* pathfinder,
                         buf.append(tmp, static_cast<size_t>(n));
                     }
                     if (buf.size() > want) buf.resize(want);
-                    body = HandleQueryJson(buf, world, pathfinder, roads, vehiclePathfinder);
+                    body = answer(buf, backends, editor);
                     ctype = "application/json";
                     buf.clear();
                 } else {
-                    body = "Locus world-query-service\n"
-                           "WebSocket JSON: raycast, find_ground_z, find_path, move_along_surface, status\n"
+                    body = "PathAndreas\n"
+                           "WebSocket JSON: raycast, find_ground_z, find_path, find_hybrid_path,\n"
+                           "  find_vehicle_path, find_offroad_path, move_along_surface,\n"
+                           "  nearest_node, world_* (editing), status\n"
                            "HTTP POST /query  same JSON body\n"
                            "HTTP GET  /health\n";
                 }
@@ -243,8 +254,8 @@ void handleClient(int fd, CollisionWorld* world, Pathfinder* pathfinder,
                 }
                 if (payload.empty()) continue;
                 conn->inflight.fetch_add(1);
-                pool.submit([payload, world, pathfinder, roads, vehiclePathfinder, conn] {
-                    std::string resp = HandleQueryJson(payload, world, pathfinder, roads, vehiclePathfinder);
+                pool.submit([payload, &backends, editor, conn] {
+                    std::string resp = answer(payload, backends, editor);
                     conn->writeRaw(wsFrame(resp, 0x1));
                     conn->inflight.fetch_sub(1);
                 });
@@ -262,10 +273,8 @@ done:
 
 } // namespace
 
-QueryServer::QueryServer(CollisionWorld* world, Pathfinder* pathfinder, const ServerConfig& cfg,
-                         RoadNetwork* roads, Pathfinder* vehiclePathfinder)
-    : world_(world), pathfinder_(pathfinder), roads_(roads),
-      vehiclePathfinder_(vehiclePathfinder), cfg_(cfg) {}
+QueryServer::QueryServer(Backends* backends, const ServerConfig& cfg, WorldEditor* editor)
+    : backends_(backends), editor_(editor), cfg_(cfg) {}
 
 QueryServer::~QueryServer() { stop(); }
 
@@ -326,7 +335,7 @@ int QueryServer::run() {
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
         // Connection I/O lives on its own thread so the query pool never blocks on recv.
         std::thread([fd, this, &pool] {
-            handleClient(fd, world_, pathfinder_, roads_, vehiclePathfinder_, pool);
+            handleClient(fd, *backends_, editor_, pool);
         }).detach();
     }
     return 0;

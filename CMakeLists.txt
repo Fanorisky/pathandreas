@@ -53,6 +53,7 @@ set(WQS_SRC
     src/road_network/road_network.cpp
     src/route_planner/route_planner.cpp
     src/world_manager/world_manager.cpp
+    src/world_manager/world_committer.cpp
     src/query_server/json_protocol.cpp
     src/query_server/query_server.cpp
 )

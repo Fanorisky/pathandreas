@@ -2,6 +2,7 @@
 #include "nlohmann/json.hpp"
 #include "road_network/road_network.h"
 #include "route_planner/route_planner.h"
+#include "world_manager/world_manager.h"
 
 using json = nlohmann::json;
 
@@ -31,7 +32,8 @@ std::string HandleQueryJson(const std::string& request,
                             const CollisionWorld* world,
                             const Pathfinder* pathfinder,
                             const RoadNetwork* roads,
-                            const Pathfinder* vehiclePathfinder) {
+                            const Pathfinder* vehiclePathfinder,
+                            WorldEditor* editor) {
     json req;
     try {
         req = json::parse(request);
@@ -210,10 +212,72 @@ std::string HandleQueryJson(const std::string& request,
         return resp.dump();
     }
 
+    // --- world editing (RemoveBuilding / CreateObject awareness) ---------
+    // Edits are recorded instantly and take effect on the next world_commit;
+    // committing rebuilds the collision world and navmesh(es) in the
+    // background, which takes minutes on the full map.
+    if (type == "world_remove_object") {
+        if (!editor) return errorResp(id, "world editing not enabled").dump();
+        if (!req.contains("model") || !req.contains("radius"))
+            return errorResp(id, "model and radius required").dump();
+        Vec3 pos;
+        if (!parseVec(req["pos"], pos, err)) return errorResp(id, err).dump();
+        const long matched = editor->removeBuilding(
+            static_cast<uint16_t>(req["model"].get<int>()), pos,
+            req["radius"].get<float>(), err);
+        if (matched < 0) return errorResp(id, err).dump();
+        return json{{"type", "world_remove_object_result"}, {"id", id},
+                    {"matched", matched}, {"pending_removes", editor->removeCount()}}.dump();
+    }
+
+    if (type == "world_add_object") {
+        if (!editor) return errorResp(id, "world editing not enabled").dump();
+        if (!req.contains("model")) return errorResp(id, "model required").dump();
+        Vec3 pos;
+        if (!parseVec(req["pos"], pos, err)) return errorResp(id, err).dump();
+        // Rotation is optional and given as SA-MP euler degrees (rx, ry, rz).
+        Quat rot;
+        if (req.contains("rot")) {
+            Vec3 euler;
+            if (!parseVec(req["rot"], euler, err)) return errorResp(id, err).dump();
+            rot = EulerDegreesToQuat(euler);
+        }
+        if (!editor->addObject(static_cast<uint16_t>(req["model"].get<int>()), pos, rot, err))
+            return errorResp(id, err).dump();
+        return json{{"type", "world_add_object_result"}, {"id", id},
+                    {"pending_adds", editor->addCount()}}.dump();
+    }
+
+    if (type == "world_reset") {
+        if (!editor) return errorResp(id, "world editing not enabled").dump();
+        editor->reset();
+        return json{{"type", "world_reset_result"}, {"id", id}}.dump();
+    }
+
+    if (type == "world_commit") {
+        if (!editor) return errorResp(id, "world editing not enabled").dump();
+        if (!editor->beginCommit(err)) return errorResp(id, err).dump();
+        // Accepted, not finished: poll world_edits for committing=false.
+        return json{{"type", "world_commit_result"}, {"id", id}, {"started", true}}.dump();
+    }
+
+    if (type == "world_edits") {
+        if (!editor) return errorResp(id, "world editing not enabled").dump();
+        return json{{"type", "world_edits_result"}, {"id", id},
+                    {"removes", editor->removeCount()}, {"adds", editor->addCount()},
+                    {"committing", editor->committing()}}.dump();
+    }
+
     if (type == "status") {
         json resp = {{"type", "status_result"}, {"id", id}};
         resp["collision"] = world && !world->empty();
         resp["roads"] = roads && roads->ready();
+        resp["world_editing"] = editor != nullptr;
+        if (editor) {
+            resp["pending_removes"] = editor->removeCount();
+            resp["pending_adds"] = editor->addCount();
+            resp["committing"] = editor->committing();
+        }
         resp["navmesh"] = pathfinder && pathfinder->ready();
         if (world && !world->empty()) {
             resp["triangles"] = world->triangleCount();

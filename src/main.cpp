@@ -3,10 +3,13 @@
 #include "navmesh_builder/navmesh_builder.h"
 #include "pathfinder/pathfinder.h"
 #include "road_network/road_network.h"
+#include "world_manager/world_manager.h"
+#include "world_manager/world_committer.h"
 #include "query_server/query_server.h"
 #include "common/log.h"
 
 #include <cstring>
+#include <memory>
 #include <string>
 #include <iostream>
 
@@ -87,19 +90,32 @@ int main(int argc, char** argv) {
         }
     }
 
+    // With --cadb the world is loaded through WorldManager, which retains the
+    // placement database so RemoveBuilding/CreateObject edits can be applied
+    // later (world_* queries). --col and --test-city have no placement data to
+    // edit, so editing stays disabled for them.
+    WorldManager manager;
     CollisionMesh mesh;
+    bool editingEnabled = false;
     if (testCity) {
         mesh = MakeTestCityMesh();
     } else if (!cadb.empty()) {
-        mesh = LoadFromCadb(cadb);
+        std::string err;
+        if (!manager.loadCadb(cadb, err)) {
+            WQS_ERROR("cadb load: %s", err.c_str());
+            return 1;
+        }
+        mesh = manager.assembleEdited();
+        editingEnabled = true;
     } else if (!col.empty()) {
         mesh = LoadFromCol(col);
     }
 
-    CollisionWorld world;
+    Backends backends;
+    backends.world = std::make_unique<CollisionWorld>();
     if (mesh.triangleCount() > 0) {
         std::string err;
-        if (!world.build(mesh, err)) {
+        if (!backends.world->build(mesh, err)) {
             WQS_ERROR("collision build: %s", err.c_str());
             return 1;
         }
@@ -107,7 +123,8 @@ int main(int argc, char** argv) {
         WQS_WARN("No collision mesh loaded. Use --mesh-test-city, --cadb, or --col.");
     }
 
-    Pathfinder pathfinder;
+    backends.pathfinder = std::make_unique<Pathfinder>();
+    Pathfinder& pathfinder = *backends.pathfinder;
     if (!navmeshOut.empty()) {
         if (mesh.triangleCount() == 0) {
             WQS_ERROR("--build-navmesh requires a collision mesh");
@@ -136,19 +153,39 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+    backends.roads = &roads;
 
     // Optional car-agent navmesh (larger radius, low climb, shallow slopes):
     // the routing backend for vehicle off-road legs and pure off-road trips.
-    Pathfinder vehiclePathfinder;
     if (!navmeshVehicleIn.empty()) {
+        backends.vehiclePathfinder = std::make_unique<Pathfinder>();
         std::string err;
-        if (!vehiclePathfinder.loadFile(navmeshVehicleIn, err)) {
+        if (!backends.vehiclePathfinder->loadFile(navmeshVehicleIn, err)) {
             WQS_ERROR("vehicle navmesh load: %s", err.c_str());
             return 1;
         }
     }
 
-    QueryServer server(&world, &pathfinder, scfg, &roads,
-                       navmeshVehicleIn.empty() ? nullptr : &vehiclePathfinder);
+    // A world commit re-bakes from scratch, and a .navmesh file does not record
+    // the agent profile it was baked with - so commits use the pedestrian
+    // parameters given on this command line, and the documented car profile for
+    // the vehicle mesh. Bake the input meshes with matching flags to keep a
+    // commit from silently changing agent behaviour.
+    NavBuildConfig vehicleCfg = ncfg;
+    vehicleCfg.cs = 0.4f;
+    vehicleCfg.agentRadius = 1.5f;
+    vehicleCfg.agentHeight = 2.5f;
+    vehicleCfg.agentClimb = 0.5f;
+    vehicleCfg.walkableSlopeAngle = 30.f;
+
+    std::unique_ptr<WorldCommitter> committer;
+    if (editingEnabled) {
+        committer = std::make_unique<WorldCommitter>(
+            manager, backends, ncfg, vehicleCfg, backends.vehiclePathfinder != nullptr);
+        WQS_INFO("World editing enabled (%zu placements); use world_* queries",
+                 manager.placementCount());
+    }
+
+    QueryServer server(&backends, scfg, committer.get());
     return server.run();
 }

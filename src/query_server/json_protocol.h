@@ -4,6 +4,7 @@
 #include "collision_world/collision_world.h"
 #include "pathfinder/pathfinder.h"
 #include "road_network/road_network.h"
+#include "query_server/world_editor.h"
 #include <string>
 
 namespace wqs {
@@ -13,6 +14,7 @@ std::string HandleQueryJson(const std::string& request,
                             const CollisionWorld* world,
                             const Pathfinder* pathfinder,
                             const RoadNetwork* roads = nullptr,
-                            const Pathfinder* vehiclePathfinder = nullptr);
+                            const Pathfinder* vehiclePathfinder = nullptr,
+                            WorldEditor* editor = nullptr);
 
 } // namespace wqs

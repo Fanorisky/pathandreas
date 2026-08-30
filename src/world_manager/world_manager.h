@@ -3,6 +3,7 @@
 #include "collision_loader/collision_loader.h"
 #include "common/vec3.h"
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,7 @@ public:
     // --- edit recording -------------------------------------------------
     // Number of stock placements the removal would exclude (for previews).
     size_t countMatching(uint16_t modelId, const Vec3& pos, float radius) const;
+    size_t placementCount() const { return db_.placements.size(); }
     void removeBuilding(uint16_t modelId, const Vec3& pos, float radius);
     // Fails when the model id is not in the database (the object would have
     // no collision geometry).
@@ -53,11 +55,15 @@ public:
     CollisionMesh assembleEdited() const;
 
 private:
-    bool placementRemoved(const CadbPlacement& p) const;
+    // Caller must hold editsMu_.
     CadbDatabase editedDatabase() const;
 
-    CadbDatabase db_;
+    CadbDatabase db_;              // immutable after loadCadb
     LoaderOptions opt_;
+    // Edits are mutated by protocol requests and snapshotted by commits that
+    // can run concurrently on another thread; assembleEdited copies the
+    // edited database under the lock and does the (long) assembly outside it.
+    mutable std::mutex editsMu_;
     std::vector<RemoveEdit> removes_;
     std::vector<AddEdit> adds_;
 };

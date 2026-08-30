@@ -51,12 +51,9 @@ bool matchesAnyRemove(const CadbPlacement& p,
 }
 } // namespace
 
-bool WorldManager::placementRemoved(const CadbPlacement& p) const {
-    return matchesAnyRemove(p, removes_);
-}
-
 size_t WorldManager::countMatching(uint16_t modelId, const Vec3& pos, float radius) const {
     const RemoveEdit probe{modelId, pos, radius};
+    std::lock_guard<std::mutex> lk(editsMu_);
     size_t count = 0;
     for (const auto& p : db_.placements)
         if (matchesAnyRemove(p, removes_, &probe)) ++count;
@@ -64,6 +61,7 @@ size_t WorldManager::countMatching(uint16_t modelId, const Vec3& pos, float radi
 }
 
 void WorldManager::removeBuilding(uint16_t modelId, const Vec3& pos, float radius) {
+    std::lock_guard<std::mutex> lk(editsMu_);
     removes_.push_back({modelId, pos, radius});
 }
 
@@ -76,11 +74,13 @@ bool WorldManager::addObject(uint16_t modelId, const Vec3& pos, const Quat& rot,
               " not in the CADB database - no collision geometry for it";
         return false;
     }
+    std::lock_guard<std::mutex> lk(editsMu_);
     adds_.push_back({modelId, pos, rot});
     return true;
 }
 
 void WorldManager::clearEdits() {
+    std::lock_guard<std::mutex> lk(editsMu_);
     removes_.clear();
     adds_.clear();
 }
@@ -91,7 +91,7 @@ CadbDatabase WorldManager::editedDatabase() const {
     edited.models = db_.models;
     edited.placements.reserve(db_.placements.size() + adds_.size());
     for (const auto& p : db_.placements)
-        if (!placementRemoved(p)) edited.placements.push_back(p);
+        if (!matchesAnyRemove(p, removes_)) edited.placements.push_back(p);
     for (const auto& a : adds_) {
         CadbPlacement p;
         p.modelId = a.modelId;
@@ -103,10 +103,17 @@ CadbDatabase WorldManager::editedDatabase() const {
 }
 
 CollisionMesh WorldManager::assembleEdited() const {
-    // Skip the placement copy entirely when there is nothing to edit - the
-    // common case on an unmodified server.
-    if (removes_.empty() && adds_.empty()) return AssembleWorldMesh(db_, opt_);
-    return AssembleWorldMesh(editedDatabase(), opt_);
+    // Snapshot the edits (and skip the placement copy entirely when there is
+    // nothing to edit - the common case on an unmodified server), then
+    // assemble outside the lock: assembly is the long part and concurrent
+    // edit recording must not wait for it.
+    CadbDatabase edited;
+    {
+        std::lock_guard<std::mutex> lk(editsMu_);
+        if (removes_.empty() && adds_.empty()) return AssembleWorldMesh(db_, opt_);
+        edited = editedDatabase();
+    }
+    return AssembleWorldMesh(edited, opt_);
 }
 
 } // namespace wqs
