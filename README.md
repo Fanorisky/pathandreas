@@ -193,6 +193,42 @@ across open desert).
 {"type":"move_along_surface_result","id":"req-4","position":[x,y,z]}
 ```
 
+**world editing** (requires `--cadb`; `--col` / `--test-city` have no placement
+data to edit)
+```json
+{"type":"world_remove_object","id":"req-8","model":1410,"pos":[x,y,z],"radius":15}
+{"type":"world_remove_object_result","id":"req-8","matched":3,"pending_removes":1}
+
+{"type":"world_add_object","id":"req-9","model":1498,"pos":[x,y,z],"rot":[0,0,45]}
+{"type":"world_add_object_result","id":"req-9","pending_adds":1}
+
+{"type":"world_edits","id":"req-10"}
+{"type":"world_edits_result","id":"req-10","removes":1,"adds":1,"committing":false}
+
+{"type":"world_commit","id":"req-11"}
+{"type":"world_commit_result","id":"req-11","started":true}
+
+{"type":"world_reset","id":"req-12"}
+```
+Mirrors the RemoveBuilding / CreateObject calls a server script makes, so the
+pathfinder stops routing around geometry the players cannot see. `matched` is
+how many stock placements the removal hit (0 means the model id or radius is
+wrong). `rot` is SA-MP euler degrees and is optional. Added objects take their
+collision from the same CADB, so only stock model ids work.
+
+Edits are recorded instantly but **take effect only on `world_commit`**, which
+re-assembles the world mesh and re-bakes the collision world and both
+navmeshes: seconds on the synthetic city, minutes on the full map. The commit
+runs in the background - queries keep answering from the old world for its
+whole duration and the new one appears in a single atomic swap - so poll
+`world_edits` for `committing: false` rather than expecting `world_commit` to
+block. A commit re-bakes with the pedestrian parameters from the command line
+and the documented car profile, since a `.navmesh` file does not record the
+agent profile it was baked with.
+
+The usual pattern is to replay the server's map edits once at boot, commit,
+and only commit again when the map actually changes.
+
 Also: `{"type":"status","id":"..."}` and `{"type":"ping","id":"..."}`.
 `GET /health` returns a status JSON.
 
