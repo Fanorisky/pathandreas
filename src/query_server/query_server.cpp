@@ -129,7 +129,8 @@ std::string wsDecode(std::string& buf, bool& closed, bool& needMore, bool& isPin
 std::string answer(const std::string& request, Backends& b, WorldEditor* editor) {
     std::shared_lock<std::shared_mutex> lk(b.mu);
     return HandleQueryJson(request, b.world.get(), b.pathfinder.get(), b.roads,
-                           b.vehiclePathfinder.get(), editor, b.pedRoads);
+                           b.vehiclePathfinder.get(), editor, b.pedRoads,
+                           b.vehicleAgent);
 }
 
 void handleClient(int fd, Backends& backends, WorldEditor* editor, ThreadPool& pool) {

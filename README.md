@@ -190,6 +190,62 @@ override the profile per query:
 | `allow_emergency` | `true` | `false` restricts to nodes not flagged emergency-only |
 | `highway_cost` | `0.8` | edge cost multiplier on highway nodes; `1.0` disables the freeway preference |
 
+### Vehicle dimensions
+
+Send a `vehicle` object and the answer is checked against that vehicle instead
+of a generic car. Every field is optional; `turn_radius` 0 (the default) means
+"do not check corners" - the service will not invent one from the length, since
+the caller knows its own steering lock.
+
+```json
+{"type":"find_vehicle_path","id":"req-5c","from":[x,y,z],"to":[x,y,z],
+ "vehicle":{"width":2.5,"length":9.0,"height":3.6,"turn_radius":12.0}}
+```
+```json
+"offroad_start":{"distance":69.8,"drivable":false,"reason":"width","routed":"mesh"},
+"vehicle_check":{
+  "width":2.5,"length":9.0,"height":3.6,"turn_radius":12.0,
+  "measured_waypoints":122,"min_clearance":0.98,
+  "low_clearance":[{"index":15,"height":0.98}],
+  "min_turn_radius":5.31,"tight_turns":[{"index":88,"radius":6.4}],
+  "mesh_agent_radius":1.5,"mesh_agent_height":2.5,"exceeds_mesh_agent":true}
+```
+
+**width** turns the off-road ground check from a line into a corridor: the
+ground is sampled across the track as well as down the centre, and a leg fails
+when the cross-slope is too steep - which is also what a gap too narrow to fit
+through looks like, since the outer samples land on whatever forms the gap.
+This is not cosmetic. Over 400 random off-road legs, the old width-blind check
+passed 214; a 2.0-wide car passes 189 of the same legs, a 2.6-wide truck 186.
+So ~6% of legs it used to call drivable are not, for a car. `reason` now says
+which check failed: `no_ground`, `step` or `width`.
+
+**height** scans overhead clearance at every waypoint. `min_clearance` is a
+lower bound - when nothing is found within the vehicle's height, that height is
+reported, so the number always means "at least this much room everywhere" and
+larger is always better. A reported clearance equal to the vehicle's height
+means it just touches. Across all 27,083 car nodes, 5 have something within
+2.5 units overhead and 419 within 6.0, so this matters for tall vehicles and
+almost never for cars.
+
+**turn_radius** flags corners the vehicle cannot take. Read `min_turn_radius`
+and `tight_turns` as curvature of the polyline the service returned, **not** of
+the road: a consumer that splines the route can take a wider line than these
+numbers suggest. They mean "slow down or cut wide here", not "this route is
+impossible". Both lists are capped at 32 entries.
+
+**mesh_agent_radius / height** appear when a car navmesh is loaded. Detour
+bakes the agent radius into the mesh by eroding it, so a mesh-routed leg is
+only valid for a vehicle that fits the bake; `exceeds_mesh_agent` says when the
+vehicle described is bigger than what the loaded mesh was built for. The
+service reports the profile it was told, not one it measured - a `.navmesh`
+file does not record its agent parameters. A genuinely correct answer for
+trucks would need a second bake at a larger radius.
+
+The checks cost a raycast per waypoint (~7 us), so they only run when a
+`vehicle` object is present; without it the response is byte-for-byte what it
+was before. `find_offroad_path` accepts the same object.
+
 Waypoints are traffic-node positions (road centrelines) bracketed by the
 caller's exact endpoint positions. The node graph covers roads and dirt roads
 (most "off-road" spots are under 100 units from a node; beaches and mountain

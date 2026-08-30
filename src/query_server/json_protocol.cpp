@@ -26,6 +26,54 @@ json errorResp(const json& id, const std::string& msg) {
     return {{"type", "error"}, {"id", id}, {"error", msg}};
 }
 
+// "vehicle": {"width":2.0,"length":4.5,"height":1.6,"turn_radius":5.5}
+// Every field is optional and falls back to the generic-sedan default, so a
+// caller can send only what it knows.
+RoutePlanner::VehicleSpec parseVehicle(const json& v) {
+    RoutePlanner::VehicleSpec s;
+    if (v.contains("width")) s.width = v["width"].get<float>();
+    if (v.contains("length")) s.length = v["length"].get<float>();
+    if (v.contains("height")) s.height = v["height"].get<float>();
+    if (v.contains("turn_radius")) s.turnRadius = v["turn_radius"].get<float>();
+    return s;
+}
+
+// Fit report for a finished route. Kept out of the query bodies because both
+// find_vehicle_path and find_offroad_path answer it the same way.
+json vehicleCheck(const CollisionWorld* world, const std::vector<Vec3>& pts,
+                  const RoutePlanner::VehicleSpec& veh, const MeshAgent& agent,
+                  bool meshLoaded) {
+    const RoutePlanner::ClearanceReport clear = RoutePlanner::CheckClearance(world, pts, veh);
+    const RoutePlanner::TurnReport turns = RoutePlanner::CheckTurns(pts, veh);
+    json low = json::array();
+    for (const auto& h : clear.hits)
+        low.push_back({{"index", h.index}, {"height", h.height}});
+    json tight = json::array();
+    for (const auto& t : turns.tight)
+        tight.push_back({{"index", t.index}, {"radius", t.radius}});
+    json out = {
+        {"width", veh.width}, {"length", veh.length}, {"height", veh.height},
+        {"turn_radius", veh.turnRadius},
+        // Clearance is only measured where there was ground below a waypoint.
+        {"measured_waypoints", clear.measured},
+        {"min_clearance", clear.minHeight},
+        {"low_clearance", low},
+        // Curvature of the returned polyline, not of the road; a consumer that
+        // splines the route can take a wider line than this.
+        {"min_turn_radius", turns.minRadius},
+        {"tight_turns", tight},
+    };
+    if (meshLoaded) {
+        // Detour bakes the agent radius into the mesh by eroding it, so a mesh
+        // route is only valid for a vehicle that fits the bake.
+        out["mesh_agent_radius"] = agent.radius;
+        out["mesh_agent_height"] = agent.height;
+        out["exceeds_mesh_agent"] =
+            (veh.width * 0.5f > agent.radius) || (veh.height > agent.height);
+    }
+    return out;
+}
+
 // Optional per-request overrides on a named profile, so a consumer can ask for
 // a delivery van that may cut through service roads or a police car that may
 // drive the wrong way, without the service inventing vehicle classes.
@@ -44,7 +92,8 @@ std::string HandleQueryJson(const std::string& request,
                             const RoadNetwork* roads,
                             const Pathfinder* vehiclePathfinder,
                             WorldEditor* editor,
-                            const RoadNetwork* pedRoads) {
+                            const RoadNetwork* pedRoads,
+                            const MeshAgent& vehicleAgent) {
     json req;
     try {
         req = json::parse(request);
@@ -126,9 +175,14 @@ std::string HandleQueryJson(const std::string& request,
         PathResult p = vehiclePathfinder->FindPath(from, to, world);
         json wps = json::array();
         for (const auto& v : p.waypoints) wps.push_back(vecArr(v));
-        return json{{"type", "find_offroad_path_result"}, {"id", id},
-                    {"success", p.success}, {"partial", p.partial},
-                    {"waypoints", wps}}.dump();
+        json resp = {{"type", "find_offroad_path_result"}, {"id", id},
+                     {"success", p.success}, {"partial", p.partial},
+                     {"waypoints", wps}};
+        if (req.contains("vehicle"))
+            resp["vehicle_check"] = vehicleCheck(world, p.waypoints,
+                                                 parseVehicle(req["vehicle"]),
+                                                 vehicleAgent, true);
+        return resp.dump();
     }
 
     if (type == "find_hybrid_path") {
@@ -174,6 +228,9 @@ std::string HandleQueryJson(const std::string& request,
         if (!parseVec(req["from"], from, err) || !parseVec(req["to"], to, err))
             return errorResp(id, err).dump();
         const RouteProfile profile = applyProfileOverrides(RouteProfile::Car(), req);
+        const bool haveVehicle = req.contains("vehicle");
+        const RoutePlanner::VehicleSpec veh =
+            haveVehicle ? parseVehicle(req["vehicle"]) : RoutePlanner::VehicleSpec{};
         RoadNetwork::RouteResult r = roads->findPath(from, to, profile);
         if (!r.success || r.waypoints.empty())
             return json{{"type", "find_vehicle_path_result"}, {"id", id},
@@ -184,8 +241,10 @@ std::string HandleQueryJson(const std::string& request,
         // the consumer knows when it is being asked to cross country.
         const Vec3& firstNode = r.waypoints.front();
         const Vec3& lastNode = r.waypoints.back();
-        RoutePlanner::OffroadLeg legStart = RoutePlanner::CheckOffroadLeg(world, from, firstNode);
-        RoutePlanner::OffroadLeg legGoal = RoutePlanner::CheckOffroadLeg(world, lastNode, to);
+        RoutePlanner::OffroadLeg legStart =
+            RoutePlanner::CheckOffroadLeg(world, from, firstNode, veh);
+        RoutePlanner::OffroadLeg legGoal =
+            RoutePlanner::CheckOffroadLeg(world, lastNode, to, veh);
 
         // A straight off-road leg that the ground check rejects can often
         // still be driven - just not in a line. When a car-agent navmesh is
@@ -240,15 +299,24 @@ std::string HandleQueryJson(const std::string& request,
         for (const int l : legLanes) lanes.push_back(l);
 
         json legS = {{"distance", legStart.distance}, {"drivable", legStart.drivable},
+                     {"reason", legStart.reason},
                      {"routed", startRouted ? "mesh" : "straight"}};
         json legG = {{"distance", legGoal.distance}, {"drivable", legGoal.drivable},
+                     {"reason", legGoal.reason},
                      {"routed", goalRouted ? "mesh" : "straight"}};
-        return json{{"type", "find_vehicle_path_result"}, {"id", id},
-                    {"success", r.success}, {"waypoints", wps},
-                    // lanes[i] = lanes available driving from waypoint i to
-                    // i+1, 0 where the network has no lane data for the leg.
-                    {"lanes", lanes}, {"has_lane_data", roads->hasLaneData()},
-                    {"offroad_start", legS}, {"offroad_goal", legG}}.dump();
+        json resp = {{"type", "find_vehicle_path_result"}, {"id", id},
+                     {"success", r.success}, {"waypoints", wps},
+                     // lanes[i] = lanes available driving from waypoint i to
+                     // i+1, 0 where the network has no lane data for the leg.
+                     {"lanes", lanes}, {"has_lane_data", roads->hasLaneData()},
+                     {"offroad_start", legS}, {"offroad_goal", legG}};
+        // The fit report costs a raycast per waypoint, so it is only produced
+        // when the caller actually described a vehicle.
+        if (haveVehicle)
+            resp["vehicle_check"] = vehicleCheck(
+                world, pts, veh, vehicleAgent,
+                vehiclePathfinder && vehiclePathfinder->ready());
+        return resp.dump();
     }
 
     if (type == "nearest_node") {

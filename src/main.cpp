@@ -207,6 +207,10 @@ int main(int argc, char** argv) {
     vehicleCfg.agentHeight = 2.5f;
     vehicleCfg.agentClimb = 0.5f;
     vehicleCfg.walkableSlopeAngle = 30.f;
+    // Tell the query layer what the car mesh was baked for, so a `vehicle`
+    // wider or taller than that gets a warning rather than a false pass.
+    backends.vehicleAgent.radius = vehicleCfg.agentRadius;
+    backends.vehicleAgent.height = vehicleCfg.agentHeight;
 
     std::unique_ptr<WorldCommitter> committer;
     if (editingEnabled) {

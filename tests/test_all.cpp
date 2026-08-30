@@ -4,6 +4,7 @@
 #include "pathfinder/pathfinder.h"
 #include "query_server/json_protocol.h"
 #include "road_network/road_network.h"
+#include "route_planner/route_planner.h"
 #include "road_network/sa_paths.h"
 #include "world_manager/world_manager.h"
 #include "common/log.h"
@@ -100,6 +101,19 @@ bool writeFile(const std::string& path, const std::vector<Node>& nodes, uint32_t
 }
 
 } // namespace syn
+
+// A horizontal quad at height z spanning [x0,x1] x [y0,y1], wound so the
+// normal points up.
+static void addSlab(CollisionMesh& m, float x0, float x1, float y0, float y1, float z) {
+    const uint32_t base = m.vertexCount();
+    m.addVertex({x0, y0, z});
+    m.addVertex({x1, y0, z});
+    m.addVertex({x1, y1, z});
+    m.addVertex({x0, y1, z});
+    const uint32_t idx[6] = {base, base + 1, base + 2, base, base + 2, base + 3};
+    for (const uint32_t i : idx) m.indices.push_back(i);
+}
+
 
 int main() {
     // --- Phase 1: CADB roundtrip + test city ---
@@ -335,6 +349,76 @@ int main() {
         std::string e2;
         CHECK(LoadSaPaths(dir, v2, p2, st2, e2) && st2.areasLoaded == 62,
               "sa paths: a corrupt area is skipped, the rest still load");
+    }
+
+
+    // --- vehicle dimensions: fit checks -----------------------------------
+    {
+        using RoutePlanner::VehicleSpec;
+
+        // Corner sharpness is pure geometry, so it can be checked exactly.
+        const std::vector<Vec3> straight = {{0,0,0}, {10,0,0}, {20,0,0}};
+        CHECK(RoutePlanner::CheckTurns(straight, {}).minRadius == 0.f,
+              "vehicle: a straight run reports no corner");
+        const std::vector<Vec3> corner = {{0,0,0}, {10,0,0}, {10,10,0}};
+        // Circle through those three points has radius 10/sqrt(2).
+        const RoutePlanner::TurnReport t0 = RoutePlanner::CheckTurns(corner, {});
+        CHECK(std::fabs(t0.minRadius - 7.0711f) < 1e-3f,
+              "vehicle: right-angle corner radius is exact");
+        CHECK(t0.tight.empty(), "vehicle: no turn flagged without a turn radius");
+        VehicleSpec bus;
+        bus.turnRadius = 10.f;
+        const RoutePlanner::TurnReport t1 = RoutePlanner::CheckTurns(corner, bus);
+        CHECK(t1.tight.size() == 1 && t1.tight[0].index == 1,
+              "vehicle: corner tighter than the vehicle is flagged");
+        VehicleSpec bike;
+        bike.turnRadius = 5.f;
+        CHECK(RoutePlanner::CheckTurns(corner, bike).tight.empty(),
+              "vehicle: corner the vehicle can take is not flagged");
+
+        // A flat floor with a raised kerb along one side, and a low roof over
+        // part of it: enough to separate the width and height checks.
+        CollisionMesh fit;
+        addSlab(fit, -10.f, 60.f, -10.f, 10.f, 0.f);   // floor
+        addSlab(fit, -10.f, 60.f, 2.f, 10.f, 3.f);     // raised shelf, y >= 2
+        addSlab(fit, 20.f, 30.f, -10.f, 1.9f, 1.2f);   // low roof over the lane
+        CollisionWorld fitWorld;
+        std::string ferr;
+        CHECK(fitWorld.build(fit, ferr), "vehicle: fit test world builds");
+
+        // Along y = 0 the floor is flat, so a narrow vehicle is fine; a wide
+        // one straddles onto the 3-unit shelf and must be refused.
+        VehicleSpec narrow; narrow.width = 1.0f;
+        VehicleSpec wide;   wide.width = 5.0f;  // straddles onto the shelf at y = 2
+        const RoutePlanner::OffroadLeg legNarrow =
+            RoutePlanner::CheckOffroadLeg(&fitWorld, {0.f, 0.f, 0.f}, {50.f, 0.f, 0.f}, narrow);
+        const RoutePlanner::OffroadLeg legWide =
+            RoutePlanner::CheckOffroadLeg(&fitWorld, {0.f, 0.f, 0.f}, {50.f, 0.f, 0.f}, wide);
+        CHECK(legNarrow.drivable, "vehicle: narrow vehicle fits the flat lane");
+        CHECK(!legWide.drivable && std::string(legWide.reason) == "width",
+              "vehicle: wide vehicle refused, reported as a width failure");
+
+        // Overhead: the roof sits 1.2 above the floor between x 20 and 30.
+        const std::vector<Vec3> lane = {{5,0,0}, {15,0,0}, {25,0,0}, {35,0,0}};
+        VehicleSpec low;  low.height = 1.0f;
+        VehicleSpec tall; tall.height = 2.5f;
+        const RoutePlanner::ClearanceReport cLow =
+            RoutePlanner::CheckClearance(&fitWorld, lane, low);
+        const RoutePlanner::ClearanceReport cTall =
+            RoutePlanner::CheckClearance(&fitWorld, lane, tall);
+        CHECK(cLow.measured == 4 && cLow.hits.empty() &&
+              std::fabs(cLow.minHeight - low.height) < 1e-4f,
+              "vehicle: a low vehicle clears the roof, reported as a lower bound");
+        CHECK(cTall.hits.size() == 1 && cTall.hits[0].index == 2 &&
+              std::fabs(cTall.minHeight - 1.2f) < 0.05f,
+              "vehicle: a tall vehicle is told which waypoint is too low");
+
+        // The protocol only pays for the checks when a vehicle is described.
+        const std::string noVeh = HandleQueryJson(
+            R"({"type":"find_offroad_path","id":"v1","from":[0,0,0],"to":[1,0,0]})",
+            &fitWorld, &pf);
+        CHECK(noVeh.find("vehicle_check") == std::string::npos,
+              "vehicle: no fit report unless a vehicle is given");
     }
 
     if (gFails) {

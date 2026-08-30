@@ -12,6 +12,15 @@
 
 namespace wqs {
 
+// The agent profile the loaded car navmesh was baked with. A .navmesh file
+// does not record it, so this is what the service was told rather than what it
+// measured; it exists so a query for a vehicle larger than the bake gets
+// warned instead of silently trusting a mesh eroded for something smaller.
+struct MeshAgent {
+    float radius = 1.5f;
+    float height = 2.5f;
+};
+
 // Backends shared by every query thread. A world commit swaps them under `mu`;
 // each request holds a shared lock for its duration, so an in-flight query
 // always finishes on the world it started with, and the swap waits for the
@@ -23,6 +32,7 @@ struct Backends {
     std::unique_ptr<Pathfinder> vehiclePathfinder;  // car-agent navmesh (optional)
     RoadNetwork* roads = nullptr;                   // vehicle node graph
     RoadNetwork* pedRoads = nullptr;                 // pedestrian node graph
+    MeshAgent vehicleAgent;                          // profile of vehiclePathfinder
 };
 
 // Protocol-facing surface for world editing (RemoveBuilding / CreateObject
