@@ -1,0 +1,113 @@
+# route_audit verdicts. Regenerate with --update-baseline.
+# A line recording a failure is a KNOWN failure kept on purpose:
+# the audit only complains when a verdict changes.
+boat/ls-coast-to-sf-bay	route=ok
+boat/random/1/000	route=ok
+boat/random/1/001	route=ok
+boat/random/1/002	route=ok
+boat/random/1/003	route=ok
+boat/random/1/004	route=ok
+boat/random/1/005	route=ok
+boat/random/1/006	route=ok
+boat/random/1/007	route=ok
+boat/random/1/008	route=ok
+boat/random/1/009	route=ok
+boat/random/1/010	route=ok
+boat/random/1/011	route=ok
+boat/random/1/012	route=ok
+boat/random/1/013	route=ok
+boat/random/1/014	route=ok
+boat/random/1/015	route=ok
+boat/random/1/016	route=ok
+boat/random/1/017	route=ok
+boat/random/1/018	route=ok
+boat/random/1/019	route=ok
+boat/random/1/020	route=ok
+boat/random/1/021	route=ok
+boat/random/1/022	route=ok
+boat/random/1/023	route=ok
+boat/random/1/024	route=ok
+boat/random/1/025	route=ok
+boat/random/1/026	route=ok
+boat/random/1/027	route=ok
+boat/random/1/028	route=ok
+boat/random/1/029	route=ok
+boat/sf-bay-to-lv-lake	route=ok
+vehicle/elevated-start-over-road	route=ok offroad_start=ok offroad_goal=width clearance=low
+vehicle/ls-grove-to-ls-airport	route=ok offroad_start=ok offroad_goal=step
+vehicle/ls-to-angel-pine	route=ok offroad_start=ok offroad_goal=step
+vehicle/ls-to-las-venturas	route=ok offroad_start=ok offroad_goal=width
+vehicle/ls-to-san-fierro	route=ok offroad_start=ok offroad_goal=step
+vehicle/lv-airport-to-strip	route=ok offroad_start=step offroad_goal=width
+vehicle/mount-chiliad-slope-start	route=none
+vehicle/random/1/000	route=ok offroad_start=ok offroad_goal=step
+vehicle/random/1/001	route=ok offroad_start=ok offroad_goal=step
+vehicle/random/1/002	route=none
+vehicle/random/1/003	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/004	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/005	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/006	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/007	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/008	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/009	route=ok offroad_start=ok offroad_goal=ok clearance=low
+vehicle/random/1/010	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/011	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/012	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/013	route=ok offroad_start=ok offroad_goal=step
+vehicle/random/1/014	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/015	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/016	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/017	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/018	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/019	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/020	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/021	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/022	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/023	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/024	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/025	route=ok offroad_start=ok offroad_goal=width clearance=low
+vehicle/random/1/026	route=ok offroad_start=ok offroad_goal=width
+vehicle/random/1/027	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/028	route=ok offroad_start=ok offroad_goal=ok
+vehicle/random/1/029	route=ok offroad_start=ok offroad_goal=ok
+vehicle/san-fierro-to-las-venturas	route=ok offroad_start=step offroad_goal=width
+vehicle/santa-maria-beach-start	route=ok offroad_start=step offroad_goal=step
+vehicle/sf-low-clearance-stretch	route=ok offroad_start=width offroad_goal=ok clearance=low
+walk/beach-to-road	route=ok src=ped unverified=none sim=arrived sim_recovery=low
+walk/grove-to-idlewood	route=ok src=ped unverified=none sim=arrived sim_recovery=low
+walk/grove-to-las-venturas	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=high
+walk/grove-to-pershing-square	route=ok src=ped unverified=none sim=arrived sim_recovery=low
+walk/grove-to-san-fierro	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
+walk/lv-strip-short	route=ok src=ped unverified=low sim=arrived sim_recovery=high
+walk/random/1/000	route=none
+walk/random/1/001	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=high
+walk/random/1/002	route=ok src=ped unverified=none sim=arrived sim_recovery=low
+walk/random/1/003	route=ok src=vehicle unverified=low sim=arrived sim_recovery=low
+walk/random/1/004	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=high
+walk/random/1/005	route=ok src=vehicle unverified=none sim=arrived sim_recovery=low
+walk/random/1/006	route=ok src=ped+vehicle unverified=none sim=arrived sim_recovery=low
+walk/random/1/007	route=ok src=vehicle unverified=low unconfirmed_hop=long sim=arrived sim_recovery=low
+walk/random/1/008	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
+walk/random/1/009	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
+walk/random/1/010	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
+walk/random/1/011	route=ok src=ped unverified=none sim=arrived sim_recovery=none
+walk/random/1/012	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
+walk/random/1/013	route=none
+walk/random/1/014	route=ok src=vehicle unverified=low ungrounded=yes unconfirmed_hop=long sim=arrived sim_recovery=low
+walk/random/1/015	route=ok src=vehicle unverified=low unconfirmed_hop=long sim=arrived sim_recovery=high
+walk/random/1/016	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
+walk/random/1/017	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
+walk/random/1/018	route=ok src=vehicle unverified=low sim=arrived sim_recovery=low
+walk/random/1/019	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=high
+walk/random/1/020	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=none
+walk/random/1/021	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
+walk/random/1/022	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=high
+walk/random/1/023	route=ok src=vehicle unverified=low unconfirmed_hop=long sim=arrived sim_recovery=high
+walk/random/1/024	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
+walk/random/1/025	route=ok src=vehicle unverified=low unconfirmed_hop=long sim=arrived sim_recovery=high
+walk/random/1/026	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
+walk/random/1/027	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
+walk/random/1/028	route=ok src=ped unverified=none sim=arrived sim_recovery=none
+walk/random/1/029	route=ok src=ped+vehicle unverified=none sim=arrived sim_recovery=low
+walk/san-fierro-to-las-venturas	route=ok src=ped+vehicle unverified=low unconfirmed_hop=long sim=arrived sim_recovery=high
+walk/sf-downtown-short	route=ok src=ped unverified=low sim=arrived sim_recovery=low

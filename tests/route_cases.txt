@@ -1,0 +1,36 @@
+# Hand-picked route cases for tools/route_audit.
+#
+#   kind     name                        from x y z          to x y z
+#
+# These are the places this project has already had trouble with, so they are
+# named rather than left to the random sampler: cross-city trips, the beach
+# and mountain legs that the off-road check rejects, an elevated start over a
+# road that runs underneath it, and the San Fierro spot with 0.98 units of
+# overhead clearance. A case that fails here is recorded in the baseline as a
+# known failure; the point is to notice when its verdict changes.
+
+# --- driving ---------------------------------------------------------------
+vehicle ls-grove-to-ls-airport       2495 -1687 13    1685 -2330 13
+vehicle ls-to-san-fierro             2495 -1687 13    -1980 300 35
+vehicle ls-to-las-venturas           2495 -1687 13    2200 1400 11
+vehicle san-fierro-to-las-venturas   -1980 300 35     2200 1400 11
+vehicle ls-to-angel-pine             2495 -1687 13    -2100 -2400 32
+vehicle santa-maria-beach-start      300 -1900 5      1685 -2330 13
+vehicle mount-chiliad-slope-start    -2200 -1700 480  -2100 -2400 32
+vehicle elevated-start-over-road     1610 -1157 55    2200 1400 11
+vehicle sf-low-clearance-stretch     -1250 40 13      -1200 70 13
+vehicle lv-airport-to-strip          1650 1450 10     2200 1400 11
+
+# --- walking ---------------------------------------------------------------
+walk    grove-to-idlewood            2495 -1687 13    2180 -1790 13
+walk    grove-to-pershing-square     2495 -1687 13    1480 -1750 13
+walk    grove-to-san-fierro          2495 -1687 13    -1980 300 35
+walk    grove-to-las-venturas        2495 -1687 13    2200 1400 11
+walk    san-fierro-to-las-venturas   -1980 300 35     2200 1400 11
+walk    sf-downtown-short            -1980 300 35     -1900 400 35
+walk    lv-strip-short               2200 1400 11     2100 1500 11
+walk    beach-to-road                300 -1900 5      500 -1750 10
+
+# --- boats -----------------------------------------------------------------
+boat    ls-coast-to-sf-bay           350 -2000 0      -1700 500 0
+boat    sf-bay-to-lv-lake            -1700 500 0      2200 600 0

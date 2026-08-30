@@ -437,6 +437,61 @@ available; the file format only, the loader here is original.
 Routing costs: a cross-city vehicle route is ~1.5 ms on the SA graph
 (LS -> San Fierro, 7,207 units), an intra-city pedestrian route ~0.5 ms.
 
+## Route audit
+
+Everything above was verified by hand at some point: scratch tools, run once,
+never committed. `tools/route_audit.cpp` is that verification made repeatable.
+
+```bash
+make audit                     # or:
+./build/route_audit --cadb data/ColAndreas.cadb --navmesh data/gta.navmesh \
+    --paths paths/Paths [--walk-sim] [--update-baseline]
+```
+
+It links the routing code directly rather than talking to a running server, so
+it sees lane counts, off-road leg reasons and waypoint arrays instead of JSON.
+110 cases: 20 hand-picked in `tests/route_cases.txt` - the places this project
+has already had trouble with, named rather than left to chance - plus 30 seeded
+random cases per kind, generated from node positions so the same data files
+always give the same corpus.
+
+Each case reduces to a verdict of **categorical flags**, never measurements:
+`route=ok src=ped+vehicle unverified=low`. A verdict survives a cost-function
+tweak; "this route is 7,207 units long" would not, and a check that breaks
+whenever anything is tuned gets deleted rather than fixed. Verdicts are
+compared against a committed baseline, so a case that is known to fail **stays
+known** - it is recorded with its failure, and the audit only complains when a
+verdict changes. Both regressions and fixes are reported; only a regression
+sets a non-zero exit code.
+
+A failure means the service answered wrongly or unusably: no route, a route
+through ungrounded space, endpoints that do not match the request, travel
+against the lanes, a boat route off the water, an unconfirmed hop over 60
+units, or a walk that does not actually complete. Off-road leg reasons and low
+clearance are *recorded but not failures* - "the last 40 units to your goal are
+not drivable in a straight line" and "this tunnel has 0.98 units of headroom"
+are correct answers about the world, and treating them as defects would bury
+the real ones. Current state: 100 pass, 10 known failures.
+
+`--walk-sim` additionally walks every walking route tick by tick the way a
+consumer must - navmesh movement, and direct movement until the **next**
+waypoint whenever a tick stalls - and reports whether the NPC arrives and how
+much of the trip needed recovery. It keeps its own baseline, since simulation
+adds flags the plain run cannot compare against. All 8 hand-picked walks and 28
+of 28 routable random walks arrive; 7 of those 28 need recovery for more than
+5% of their ticks, which is the honest remaining weakness.
+
+Note on ungrounded routes: this cannot be an absolute height test. San Andreas
+has road tunnels down at z -46 that are below sea level and perfectly solid.
+What separates a tunnel from open water is that a tunnel has ground directly
+under the waypoint.
+
+**This cannot run in CI.** It needs `ColAndreas.cadb`, the baked navmeshes and
+the game's `NODES*.DAT`, none of which may be redistributed. `make test` covers
+what can be checked synthetically; this is a local gate to run before
+committing anything that touches routing. The baselines store only case ids and
+verdicts - no coordinates, nothing derived from the game files.
+
 ## What this is not
 
 NPC movement, animations, decision-making, streaming, and Pawn natives live

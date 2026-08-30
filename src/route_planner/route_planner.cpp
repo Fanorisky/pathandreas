@@ -156,6 +156,9 @@ HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
     if (!navmesh || !navmesh->ready() || backbone.size() < 2) {
         out.straightSegments = backbone.size() > 1
                                    ? static_cast<long>(backbone.size()) - 1 : 0;
+        for (size_t i = 1; i < backbone.size(); ++i)
+            out.longestUnconfirmed =
+                std::max(out.longestUnconfirmed, (backbone[i] - backbone[i - 1]).length());
         out.waypoints = std::move(backbone);
         out.success = true;
         return out;
@@ -191,6 +194,7 @@ HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
         else {
             pts.push_back(b);
             ++out.straightSegments;
+            out.longestUnconfirmed = std::max(out.longestUnconfirmed, (b - a).length());
         }
     }
     // A repaired last segment ends on the mesh's snap of the goal; the contract

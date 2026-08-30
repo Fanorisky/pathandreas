@@ -35,6 +35,11 @@ struct HybridResult {
     // recovery mode.
     long repairedSegments = 0;
     long straightSegments = 0;
+    // Length of the longest hop nothing confirmed. This, not the waypoint
+    // spacing, is what tells a controller how much unverified ground it may
+    // have to cross in one go: a long gap inside a confirmed stretch is just a
+    // straight run over open walkable ground.
+    float longestUnconfirmed = 0.f;
 };
 
 // Combines the two backends instead of choosing between them, because they

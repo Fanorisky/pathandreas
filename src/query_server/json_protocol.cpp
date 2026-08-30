@@ -215,7 +215,10 @@ std::string HandleQueryJson(const std::string& request,
                     // How much of the route the navmesh confirmed as walkable.
                     // straight segments are where recovery mode is still needed.
                     {"repaired_segments", r.repairedSegments},
-                    {"straight_segments", r.straightSegments}}.dump();
+                    {"straight_segments", r.straightSegments},
+                    // Longest single unconfirmed hop, which is what bounds how
+                    // far a controller may have to cross on its own.
+                    {"longest_unconfirmed", r.longestUnconfirmed}}.dump();
     }
 
     if (type == "find_boat_path") {

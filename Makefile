@@ -39,9 +39,9 @@ WQS_SRC := \
 BUILD := build
 OBJS  := $(patsubst %.cpp,$(BUILD)/%.o,$(WQS_SRC) $(RECAST_SRC) $(DETOUR_SRC))
 
-.PHONY: all clean test service builder components
+.PHONY: all clean test service builder components audit
 
-all: $(BUILD)/pathandreas $(BUILD)/navmesh_builder $(BUILD)/pathandreas_tests $(BUILD)/navmesh_components
+all: $(BUILD)/pathandreas $(BUILD)/navmesh_builder $(BUILD)/pathandreas_tests $(BUILD)/navmesh_components $(BUILD)/route_audit
 
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
@@ -72,3 +72,12 @@ clean:
 $(BUILD)/navmesh_components: $(OBJS) tools/navmesh_components.cpp
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) tools/navmesh_components.cpp $(OBJS) $(LDFLAGS) -o $@
+
+$(BUILD)/route_audit: $(OBJS) tools/route_audit.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) tools/route_audit.cpp $(OBJS) $(LDFLAGS) -o $@
+
+# Route regression gate. Needs the local game data, so it is not part of `test`.
+audit: $(BUILD)/route_audit
+	$(BUILD)/route_audit --cadb data/ColAndreas.cadb --navmesh data/gta.navmesh \
+	    --paths paths/Paths
