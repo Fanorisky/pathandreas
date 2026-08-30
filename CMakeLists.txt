@@ -68,13 +68,13 @@ if(WQS_USE_BULLET)
         ${bullet3_SOURCE_DIR}/src)
 endif()
 
-add_executable(world-query-service src/main.cpp)
-target_link_libraries(world-query-service PRIVATE wqs)
+add_executable(pathandreas src/main.cpp)
+target_link_libraries(pathandreas PRIVATE wqs)
 
 add_executable(navmesh_builder tools/navmesh_builder_cli.cpp)
 target_link_libraries(navmesh_builder PRIVATE wqs)
 
 if(WQS_BUILD_TESTS)
-    add_executable(wqs_tests tests/test_all.cpp)
-    target_link_libraries(wqs_tests PRIVATE wqs)
+    add_executable(pathandreas_tests tests/test_all.cpp)
+    target_link_libraries(pathandreas_tests PRIVATE wqs)
 endif()

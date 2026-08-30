@@ -38,13 +38,13 @@ OBJS  := $(patsubst %.cpp,$(BUILD)/%.o,$(WQS_SRC) $(RECAST_SRC) $(DETOUR_SRC))
 
 .PHONY: all clean test service builder components
 
-all: $(BUILD)/world-query-service $(BUILD)/navmesh_builder $(BUILD)/wqs_tests $(BUILD)/navmesh_components
+all: $(BUILD)/pathandreas $(BUILD)/navmesh_builder $(BUILD)/pathandreas_tests $(BUILD)/navmesh_components
 
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-$(BUILD)/world-query-service: $(OBJS) src/main.cpp
+$(BUILD)/pathandreas: $(OBJS) src/main.cpp
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) src/main.cpp $(OBJS) $(LDFLAGS) -o $@
 
@@ -52,14 +52,14 @@ $(BUILD)/navmesh_builder: $(OBJS) tools/navmesh_builder_cli.cpp
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) tools/navmesh_builder_cli.cpp $(OBJS) $(LDFLAGS) -o $@
 
-$(BUILD)/wqs_tests: $(OBJS) tests/test_all.cpp
+$(BUILD)/pathandreas_tests: $(OBJS) tests/test_all.cpp
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) tests/test_all.cpp $(OBJS) $(LDFLAGS) -o $@
 
-test: $(BUILD)/wqs_tests
-	$(BUILD)/wqs_tests
+test: $(BUILD)/pathandreas_tests
+	$(BUILD)/pathandreas_tests
 
-service: $(BUILD)/world-query-service
+service: $(BUILD)/pathandreas
 
 builder: $(BUILD)/navmesh_builder
 

@@ -14,9 +14,9 @@ using namespace wqs;
 
 static void usage() {
     std::fprintf(stderr,
-        "Locus world-query-service\n"
+        "PathAndreas\n"
         "Usage:\n"
-        "  world-query-service [options]\n"
+        "  pathandreas [options]\n"
         "Options:\n"
         "  --cadb PATH          Load ColAndreas .cadb and build collision world\n"
         "  --col PATH           Load raw GTA SA .col (model-local)\n"

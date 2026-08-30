@@ -26,7 +26,7 @@ walkable path from A to B?*
 ## Layout
 
 ```
-world-query-service/
+pathandreas/
 ├── CMakeLists.txt
 ├── Makefile                  # no-CMake build (built-in BVH)
 ├── src/
@@ -98,10 +98,10 @@ from the walkable mesh (don’t place those models, or strip them before bake).
 ```bash
 # Synthetic city (no GTA files) — collision + navmesh + server
 ./build/navmesh_builder --test-city --out /tmp/city.navmesh
-./build/world-query-service --mesh-test-city --navmesh /tmp/city.navmesh --port 8090
+./build/pathandreas --mesh-test-city --navmesh /tmp/city.navmesh --port 8090
 
 # Production-shaped
-./build/world-query-service --cadb scriptfiles/colandreas/ColAndreas.cadb \
+./build/pathandreas --cadb scriptfiles/colandreas/ColAndreas.cadb \
     --navmesh data/sa.navmesh --roads data/GPS.dat \
     --navmesh-vehicle data/gta_vehicle.navmesh \
     --bind 0.0.0.0 --port 8090 --threads 4
