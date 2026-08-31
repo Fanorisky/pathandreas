@@ -164,31 +164,40 @@ geometry but only ~20.8% of it is one walkable component.
    and the one the goal is in. Handover happens where a sidewalk node is
    actually within 30 units of the corridor, so the route does not "hand over"
    in open countryside.
-3. Each hop between backbone waypoints replaced by a navmesh route known to be
-   walkable, keeping the straight line where the navmesh cannot confirm one -
-   or where its detour would be more than 6x the hop, which means the two
-   backends disagree and the node graph is the one to trust for connectivity.
+3. The navmesh pulls the route tight through that corridor. This is the part
+   that makes the nodes a *reference* rather than a track: from each point the
+   route reaches for the furthest corridor node the navmesh can get to by a
+   path no longer than the corridor between them allows, so a run of nodes
+   across open ground collapses into one direct mesh leg. Where the whole trip
+   is one connected mesh region it becomes the navmesh's own near-optimal path
+   with the nodes skipped entirely; where the mesh fragments, the route falls
+   back to the next node and marks that hop unverified. The goal is allowed to
+   sit a few units off the mesh - a kerb, a slope - so a near-straight walk is
+   not dragged back onto a detouring corridor for the sake of the last step.
+
+Tracing the corridor node by node used to hug the road/sidewalk centre and
+zig-zag through every node. Pulling it tight is both shorter and far
+straighter, and where the mesh is connected it matches routing on the mesh
+alone:
+
+| route | node-by-node | pulled | turning |
+|---|---|---|---|
+| Grove -> Pershing Square | 1,888u | 1,140u | 35.8 -> 5.7 rad |
+| a reported LV trip (150u apart) | 357u | 157u | 9.3 -> 1.7 rad |
+| Grove -> San Fierro | 8,129u | 5,868u | - |
+| San Fierro -> Las Venturas | 11,102u | 5,013u | - |
 
 `graph` reports which networks carried it: `"ped"`, `"vehicle"` or
-`"ped+vehicle"`. `straight_segments` is the number of hops nothing confirmed,
-and it is the only number that matters for a controller - that is where a
-recovery mode is still needed. Measured on the full map:
+`"ped+vehicle"`. `straight_segments` is the number of hops the navmesh could
+not confirm - the only number that matters for a controller, since that is
+where recovery mode is still needed - and `longest_unconfirmed` bounds how far
+one such hop runs. Across the map that is 2-7 hops of a few hundred; inside a
+city it is usually zero.
 
-| route | backbone | confirmed | unverified hops | max waypoint gap |
-|---|---|---|---|---|
-| Grove -> Idlewood | 19 wp | 169 wp | 0 of 18 | 44.9u -> 25.9u |
-| Grove -> Pershing Sq | 61 wp | 589 wp | 0 of 60 | 44.9u -> 26.3u |
-| Grove -> San Fierro | 249 wp | 2,080 wp | 2 of 248 | 72.7u -> 38.7u |
-| Grove -> Las Venturas | 126 wp | 1,099 wp | 3 of 125 | 73.3u -> 49.3u |
-| San Fierro -> Las Venturas | 318 wp | 2,588 wp | 7 of 317 | 95.3u -> 77.3u |
-
-Confirmation costs a navmesh query per hop: 4-10 ms inside a city, 60-115 ms
-across the map, against 3-12 ms without. `"repair": false` returns the sparse
-backbone instead, at roughly `minSpacing` (25 unit) waypoint spacing; a
-confirmed route is denser than that, since it carries the navmesh's own corner
-points. A large gap in a confirmed route is not necessarily unverified - a
-straight run across open walkable ground is one waypoint to the next - so read
-`straight_segments`, not the spacing.
+The pull costs a handful of navmesh queries per connected run (it doubles its
+reach rather than stepping node by node): 150-230 ms across the whole map,
+a few ms inside a city. `"repair": false` skips it and returns the sparse node
+backbone at ~`minSpacing` (25 unit) spacing.
 
 Waypoint 0 and the last are your exact endpoint positions. Semantics
 otherwise: a graph-following route to the node nearest the goal, not exact

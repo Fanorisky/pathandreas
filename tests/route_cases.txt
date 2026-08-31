@@ -30,6 +30,10 @@ walk    san-fierro-to-las-venturas   -1980 300 35     2200 1400 11
 walk    sf-downtown-short            -1980 300 35     -1900 400 35
 walk    lv-strip-short               2200 1400 11     2100 1500 11
 walk    beach-to-road                300 -1900 5      500 -1750 10
+# Reported by the user: the ped node corridor detours ~2.4x here (357u for a
+# 150u trip), but the navmesh has a near-straight walk. Guards that the pull
+# takes the mesh line instead of tracing the nodes.
+walk    lv-node-detour-vs-mesh       1700.89 -1482.22 12.67   1702.83 -1632.49 19.30
 
 # --- boats -----------------------------------------------------------------
 boat    ls-coast-to-sf-bay           350 -2000 0      -1700 500 0

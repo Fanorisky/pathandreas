@@ -164,41 +164,104 @@ HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
         return out;
     }
 
-    // 3. Each straight hop between backbone points replaced by a route the
-    //    navmesh knows is walkable. A mesh detour far longer than the hop means
-    //    the backbone and the mesh disagree about this stretch; the node graph
-    //    is the more trustworthy of the two for macro connectivity, so keep the
-    //    straight line there rather than bolting on a large loop, and let the
-    //    consumer's recovery mode handle it as before.
-    constexpr float kMaxDetour = 6.f;
+    // 3. Pull the route tight through the corridor with the navmesh. This is
+    //    the crux of combining the two backends: the node graph is the
+    //    reference for WHICH WAY to go and for crossing the gaps where the mesh
+    //    fragments, but the navmesh finds the actual line. Tracing the route
+    //    node to node produced a path that hugged the road/sidewalk centre and
+    //    zig-zagged through every node - up to 40% longer than the mesh's own
+    //    path over the same ground, with several times the turning.
+    //
+    //    From each anchor we reach for the FURTHEST corridor point the mesh can
+    //    get to by a path no longer than the corridor between them allows. A
+    //    run of nodes across open ground then collapses to a single straight
+    //    mesh leg, and where the whole route is one connected mesh region it
+    //    becomes the direct optimal path with the nodes skipped entirely. Where
+    //    the mesh cannot reach the next node - a fragment boundary - we keep the
+    //    straight hop and count it unverified, exactly as before: that is where
+    //    a consumer still needs its recovery mode.
+    //
+    //    The reach is found by doubling (anchor+1, +2, +4, ...) until a probe
+    //    fails the length test, so a connected stretch of N nodes costs about
+    //    log2(N) navmesh queries rather than N. A mesh leg longer than the
+    //    corridor arc by more than kSlack is rejected: that means the mesh had
+    //    to detour around something the node corridor ignores, and the node
+    //    graph is the one to trust for macro direction, so we take a shorter
+    //    jump instead. Corner-cutting only ever makes the leg shorter, so it is
+    //    always accepted - which is where the optimisation comes from.
+    constexpr float kSlack = 1.25f;         // gates skipping intermediate nodes
+    constexpr float kAdjacentDetour = 6.f;  // gates confirming the very next node
+    // How close to the goal a partial mesh path must land to count as reaching
+    // it; the last few units to an off-mesh goal are the consumer's approach.
+    constexpr float kGoalReachTolerance = 8.f;
     std::vector<Vec3> pts;
     pts.push_back(backbone.front());
-    for (size_t i = 1; i < backbone.size(); ++i) {
-        const Vec3& a = backbone[i - 1];
-        const Vec3& b = backbone[i];
-        const PathResult leg = navmesh->FindPath(a, b, world);
-        bool repaired = false;
-        if (leg.success && !leg.partial && leg.waypoints.size() >= 2) {
-            float len = 0.f;
-            for (size_t k = 1; k < leg.waypoints.size(); ++k)
-                len += (leg.waypoints[k] - leg.waypoints[k - 1]).length();
-            const float direct = (b - a).length();
-            if (len <= std::max(direct * kMaxDetour, minSpacing)) {
-                // waypoints[0] is the mesh's snap of `a`, already in `pts`.
-                for (size_t k = 1; k < leg.waypoints.size(); ++k)
-                    pts.push_back(leg.waypoints[k]);
-                repaired = true;
+    size_t i = 0;
+    while (i + 1 < backbone.size()) {
+        const Vec3& a = backbone[i];
+        size_t bestJ = i;                 // i means "nothing reachable beyond the next node"
+        std::vector<Vec3> bestLeg;
+        float arc = 0.f;                  // corridor arc-length from i to the current probe
+        size_t reached = i;               // how far arc has been accumulated
+        for (size_t step = 1;; step *= 2) {
+            const size_t cand = std::min(i + step, backbone.size() - 1);
+            for (size_t k = reached + 1; k <= cand; ++k)
+                arc += (backbone[k] - backbone[k - 1]).length();
+            reached = cand;
+            const PathResult leg = navmesh->FindPath(a, backbone[cand], world);
+            const bool isGoal = cand == backbone.size() - 1;
+            // A leg is normally only trusted when it reaches its target poly
+            // (not partial). The one exception is the goal itself: unlike every
+            // intermediate gate, which is a node and therefore on the mesh, the
+            // goal is the caller's own position and may sit just off the mesh -
+            // on a kerb, a slope, a tiny fragment. When the mesh gets within a
+            // few units of it, that is the real route and the last step is the
+            // consumer's approach; rejecting it for the partial flag is what
+            // used to drag the whole route back onto the detouring node
+            // corridor when a near-straight mesh path existed.
+            bool usable = leg.success && leg.waypoints.size() >= 2;
+            if (usable && leg.partial) {
+                const Vec3& end = leg.waypoints.back();
+                const Vec3& tgt = backbone[cand];
+                const float d = std::sqrt((end.x - tgt.x) * (end.x - tgt.x) +
+                                          (end.y - tgt.y) * (end.y - tgt.y));
+                usable = isGoal && d <= kGoalReachTolerance;
             }
+            bool ok = false;
+            if (usable) {
+                float l = 0.f;
+                for (size_t k = 1; k < leg.waypoints.size(); ++k)
+                    l += (leg.waypoints[k] - leg.waypoints[k - 1]).length();
+                // Two different questions with two different thresholds. For the
+                // adjacent node it is only "is the next node walkable from here"
+                // - the mesh may curve well around a corner and still be the
+                // route, so this is lenient. For a node further along it is
+                // "can I skip everything in between", which must stay near the
+                // corridor or the shortcut leaves it, so it is tight.
+                const float threshold = (cand == i + 1) ? kAdjacentDetour : kSlack;
+                if (l <= std::max(arc, minSpacing) * threshold) {
+                    ok = true;
+                    bestJ = cand;
+                    bestLeg = leg.waypoints;
+                }
+            }
+            if (!ok || isGoal) break;
         }
-        if (repaired) ++out.repairedSegments;
-        else {
+        if (bestJ > i) {
+            // waypoints[0] is the mesh's snap of `a`, already the last point in pts.
+            for (size_t k = 1; k < bestLeg.size(); ++k) pts.push_back(bestLeg[k]);
+            out.repairedSegments += static_cast<long>(bestJ - i);
+            i = bestJ;
+        } else {
+            const Vec3& b = backbone[i + 1];
             pts.push_back(b);
             ++out.straightSegments;
             out.longestUnconfirmed = std::max(out.longestUnconfirmed, (b - a).length());
+            i += 1;
         }
     }
-    // A repaired last segment ends on the mesh's snap of the goal; the contract
-    // is that the final waypoint is the caller's own position.
+    // A repaired final leg ends on the mesh's snap of the goal; the contract is
+    // that the last waypoint is the caller's own position.
     if ((pts.back() - backbone.back()).length() > 0.5f) pts.push_back(backbone.back());
 
     out.waypoints = std::move(pts);

@@ -82,21 +82,29 @@ std::string bucket(long part, long total) {
     return "high";
 }
 
-// How far off the ground a waypoint may sit before it is not on the ground.
-// Node heights are approximate, so this is generous.
-constexpr float kGroundTolerance = 3.f;
+// How far above or below a waypoint a solid surface may be and still count as
+// "the ground here". The navmesh detail mesh and the collision world disagree
+// by a few units in dense areas - measured at 3-4u around Las Venturas - and a
+// consumer snaps to the ground every tick anyway, so this is deliberately
+// loose. It still separates that disagreement from genuine void-walking, where
+// the nearest surface is tens of units away.
+constexpr float kGroundTolerance = 5.f;
 
-// A route through open water or through nothing at all. An absolute height test
-// cannot answer this: San Andreas has road tunnels down at z -46, which are
-// below sea level and perfectly solid. What distinguishes them is that a tunnel
-// has ground directly under the waypoint and open water does not.
+// A route through open water or through nothing at all. Two traps this has to
+// avoid: an absolute height test is wrong because SA has road tunnels at z -46
+// that are solid, and a one-directional downward probe is wrong because it
+// cannot see ground that sits just ABOVE the waypoint - which is most of what a
+// navmesh/collision z disagreement looks like. So cast a short vertical ray
+// through a tolerance-sized window around the waypoint: a hit means a walkable
+// surface is right there, above or below; a miss means there genuinely is none.
 bool ungrounded(const CollisionWorld& world, const std::vector<Vec3>& p) {
     long bad = 0;
     for (const Vec3& v : p) {
-        float gz = 0.f;
-        if (!world.FindGroundZFrom(v.x, v.y, v.z + 2.f, gz) ||
-            std::fabs(gz - v.z) > kGroundTolerance)
-            ++bad;
+        RayHitResult hit;
+        const bool grounded =
+            world.RayCastLine({v.x, v.y, v.z + kGroundTolerance},
+                              {v.x, v.y, v.z - kGroundTolerance}, hit) && hit.hit;
+        if (!grounded) ++bad;
     }
     // One stray waypoint is noise; a route that is repeatedly nowhere is not.
     return bad > 2 && bad * 100 / static_cast<long>(p.size()) > 5;
@@ -451,9 +459,13 @@ int main(int argc, char** argv) {
         } else if (prev->second != v) {
             const bool wasOk = isPass(prev->second);
             ++changed;
-            if (wasOk && !ok) { ++regressed; notes.push_back("REGRESSED " + c.id() + "\n    was: " + prev->second + "\n    now: " + v); }
-            else if (!wasOk && ok) { ++fixed; notes.push_back("FIXED     " + c.id() + "\n    was: " + prev->second + "\n    now: " + v); }
-            else notes.push_back("changed   " + c.id() + "\n    was: " + prev->second + "\n    now: " + v);
+            char loc[160];
+            std::snprintf(loc, sizeof loc, "\n    from [%.1f %.1f %.1f] to [%.1f %.1f %.1f]",
+                          c.from.x, c.from.y, c.from.z, c.to.x, c.to.y, c.to.z);
+            const std::string tail = std::string(loc) + "\n    was: " + prev->second + "\n    now: " + v;
+            if (wasOk && !ok) { ++regressed; notes.push_back("REGRESSED " + c.id() + tail); }
+            else if (!wasOk && ok) { ++fixed; notes.push_back("FIXED     " + c.id() + tail); }
+            else notes.push_back("changed   " + c.id() + tail);
         }
     }
 

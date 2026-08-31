@@ -78,6 +78,7 @@ walk/grove-to-idlewood	route=ok src=ped unverified=none
 walk/grove-to-las-venturas	route=ok src=ped+vehicle unverified=low
 walk/grove-to-pershing-square	route=ok src=ped unverified=none
 walk/grove-to-san-fierro	route=ok src=ped+vehicle unverified=low
+walk/lv-node-detour-vs-mesh	route=ok src=ped unverified=none
 walk/lv-strip-short	route=ok src=ped unverified=low
 walk/random/1/000	route=none
 walk/random/1/001	route=ok src=ped+vehicle unverified=low
@@ -93,13 +94,13 @@ walk/random/1/010	route=ok src=ped+vehicle unverified=low
 walk/random/1/011	route=ok src=ped unverified=none
 walk/random/1/012	route=ok src=ped+vehicle unverified=low
 walk/random/1/013	route=none
-walk/random/1/014	route=ok src=vehicle unverified=low ungrounded=yes unconfirmed_hop=long
+walk/random/1/014	route=ok src=vehicle unverified=low unconfirmed_hop=long
 walk/random/1/015	route=ok src=vehicle unverified=low unconfirmed_hop=long
 walk/random/1/016	route=ok src=ped+vehicle unverified=low
 walk/random/1/017	route=ok src=ped+vehicle unverified=low
 walk/random/1/018	route=ok src=vehicle unverified=low
 walk/random/1/019	route=ok src=ped+vehicle unverified=low
-walk/random/1/020	route=ok src=ped+vehicle unverified=low
+walk/random/1/020	route=ok src=ped+vehicle unverified=none
 walk/random/1/021	route=ok src=ped+vehicle unverified=low
 walk/random/1/022	route=ok src=ped+vehicle unverified=low
 walk/random/1/023	route=ok src=vehicle unverified=low unconfirmed_hop=long
@@ -110,4 +111,4 @@ walk/random/1/027	route=ok src=ped+vehicle unverified=low
 walk/random/1/028	route=ok src=ped unverified=none
 walk/random/1/029	route=ok src=ped+vehicle unverified=none
 walk/san-fierro-to-las-venturas	route=ok src=ped+vehicle unverified=low unconfirmed_hop=long
-walk/sf-downtown-short	route=ok src=ped unverified=low
+walk/sf-downtown-short	route=ok src=ped unverified=none
