@@ -5,9 +5,11 @@
 // road network) and small fragments only for interiors, rooftops and islands.
 //
 // The graph is built from two edge kinds:
-//   - poly->neis[] entries without DT_EXT_LINK (same-tile adjacency), and
+//   - poly->neis[] entries without DT_EXT_LINK (same-tile adjacency),
 //   - tile->links[] entries whose target resolves in a DIFFERENT tile
-//     (cross-tile stitches). Same-tile links[] entries are just the
+//     (cross-tile stitches), and
+//   - off-mesh connections, which live in the same tile as their start poly
+//     and so are NOT covered by the rule above. Same-tile surface links are just the
 //     adjacency above stored as links and are skipped to avoid double counts.
 
 #include "DetourNavMesh.h"
@@ -94,7 +96,7 @@ int main(int argc, char** argv) {
         if (a != b) parent[b] = a;
     };
 
-    long internalEdges = 0, crossTileLinks = 0;
+    long internalEdges = 0, crossTileLinks = 0, offMeshLinks = 0;
     long tilesSeen = 0;
     for (size_t i = 0; i < n; ++i) {
         const dtMeshTile* t = nullptr;
@@ -111,15 +113,24 @@ int main(int argc, char** argv) {
             auto e = idx.find(mesh->encodePolyId(salt, it, nei - 1));
             if (e != idx.end()) { unite(i, e->second); ++internalEdges; }
         }
-        // Links: only count (and union) those crossing into another tile.
+        // Links: cross-tile stitches, plus off-mesh connections. Same-tile
+        // surface links duplicate poly->neis above, but an off-mesh connection
+        // lives in the SAME tile as the polygon it starts from, so skipping
+        // same-tile links entirely made every step link invisible - the mesh
+        // reported the same component count with the links present as without,
+        // and each connection showed up as its own one-poly component.
         for (unsigned int l = poly->firstLink; l != DT_NULL_LINK; l = t->links[l].next) {
             auto e = idx.find(t->links[l].ref);
             if (e == idx.end()) continue;
             const dtMeshTile* t2 = nullptr;
             const dtPoly* p2 = nullptr;
-            if (dtStatusFailed(mesh->getTileAndPolyByRef(t->links[l].ref, &t2, &p2)) || t2 == t) continue;
+            if (dtStatusFailed(mesh->getTileAndPolyByRef(t->links[l].ref, &t2, &p2))) continue;
+            const bool offMesh = poly->getType() == DT_POLYTYPE_OFFMESH_CONNECTION ||
+                                 p2->getType() == DT_POLYTYPE_OFFMESH_CONNECTION;
+            if (t2 == t && !offMesh) continue;   // same-tile surface: already counted
             unite(i, e->second);
-            ++crossTileLinks;
+            if (offMesh) ++offMeshLinks;
+            else ++crossTileLinks;
         }
     }
 
@@ -160,7 +171,7 @@ int main(int argc, char** argv) {
     }
 
     std::printf("tiles: %ld  polys: %zu\n", tilesSeen, n);
-    std::printf("edges: internal=%ld cross-tile=%ld\n", internalEdges, crossTileLinks);
+    std::printf("edges: internal=%ld cross-tile=%ld off-mesh=%ld\n", internalEdges, crossTileLinks, offMeshLinks);
     std::printf("components: %zu  (1 poly: %ld, 2-10: %ld, 11-100: %ld, 101-1000: %ld, >1000: %ld)\n",
                 st.size(), c1, c2, c3, c4, c5);
     const long biggest = bySize.empty() ? 0 : bySize[0].first;
