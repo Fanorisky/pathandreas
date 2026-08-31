@@ -40,6 +40,16 @@ struct HybridResult {
     // have to cross in one go: a long gap inside a confirmed stretch is just a
     // straight run over open walkable ground.
     float longestUnconfirmed = 0.f;
+    // False when the walk stops short of the requested goal because the goal
+    // is not on the walkable surface the route reaches - most often a
+    // different floor reached by an elevator, ladder or jump, none of which
+    // the navmesh or the node graph model. The route still ends at the best
+    // reachable point (the base below the goal, say); goalGap* is what remains
+    // from there to the goal. A large goalGapVert with a small goalGapHoriz is
+    // the signature of vertical transport the consumer has to handle itself.
+    bool reachedGoal = true;
+    float goalGapHoriz = 0.f;
+    float goalGapVert = 0.f;
 };
 
 // Combines the two backends instead of choosing between them, because they

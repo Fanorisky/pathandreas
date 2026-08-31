@@ -251,15 +251,24 @@ std::string auditWalk(Backends& b, const Case& c, bool simulate) {
     // stretch is a straight run over open ground. What matters is the longest
     // hop nothing confirmed.
     if (r.longestUnconfirmed > 60.f) f.push_back("unconfirmed_hop=long");
-    // The contract says the first and last waypoints are the caller's own
-    // positions; ground snapping moves z, so compare horizontally.
+    // The contract says the first waypoint is the caller's start; the last is
+    // the goal only when the walk actually reached it. A route that stops at
+    // the base of an elevator ends short on purpose, so it reports goal=short
+    // with the gap rather than failing an endpoint check it was never meant to
+    // meet. goal=short is recorded, not a failure - stopping at the reachable
+    // point below an unreachable floor is the honest answer.
     auto flat = [](const Vec3& a, const Vec3& b2) {
         const float dx = a.x - b2.x, dy = a.y - b2.y;
         return std::sqrt(dx * dx + dy * dy);
     };
-    if (flat(r.waypoints.front(), c.from) > kEndpointTolerance ||
-        flat(r.waypoints.back(), c.to) > kEndpointTolerance)
-        f.push_back("endpoints=off");
+    if (flat(r.waypoints.front(), c.from) > kEndpointTolerance) f.push_back("start=off");
+    if (r.reachedGoal) {
+        if (flat(r.waypoints.back(), c.to) > kEndpointTolerance) f.push_back("endpoints=off");
+    } else {
+        char g[48];
+        std::snprintf(g, sizeof g, "goal=short(v%.0f)", r.goalGapVert);
+        f.push_back(g);
+    }
 
     if (simulate && b.havePed) {
         const SimResult sim = simulateWalk(b.ped, b.haveWorld ? &b.world : nullptr, r.waypoints);
@@ -278,8 +287,8 @@ std::string auditWalk(Backends& b, const Case& c, bool simulate) {
 // and marking them as failures would bury the real ones.
 bool isPass(const std::string& verdict) {
     static const char* bad[] = {"route=none", "ungrounded=yes", "gap=wide",
-                                "endpoints=off", "againstlanes=yes", "offwater=yes",
-                                "unconfirmed_hop=long", "sim=stuck",
+                                "start=off", "endpoints=off", "againstlanes=yes",
+                                "offwater=yes", "unconfirmed_hop=long", "sim=stuck",
                                 "sim_recovery=high"};
     for (const char* x : bad)
         if (verdict.find(x) != std::string::npos) return false;

@@ -218,7 +218,14 @@ std::string HandleQueryJson(const std::string& request,
                     {"straight_segments", r.straightSegments},
                     // Longest single unconfirmed hop, which is what bounds how
                     // far a controller may have to cross on its own.
-                    {"longest_unconfirmed", r.longestUnconfirmed}}.dump();
+                    {"longest_unconfirmed", r.longestUnconfirmed},
+                    // False when the walk stops short of the goal - typically a
+                    // goal on another floor reached by an elevator, which the
+                    // service cannot route. goal_gap is [horizontal, vertical]
+                    // from the last waypoint to the requested goal; a large
+                    // vertical with a small horizontal is that lift.
+                    {"reached_goal", r.reachedGoal},
+                    {"goal_gap", json::array({r.goalGapHoriz, r.goalGapVert})}}.dump();
     }
 
     if (type == "find_boat_path") {

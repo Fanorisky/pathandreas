@@ -260,9 +260,36 @@ HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
             i += 1;
         }
     }
-    // A repaired final leg ends on the mesh's snap of the goal; the contract is
-    // that the last waypoint is the caller's own position.
-    if ((pts.back() - backbone.back()).length() > 0.5f) pts.push_back(backbone.back());
+    // Finish at the goal. The last pulled leg may have stopped at the best
+    // reachable point rather than the goal itself: the goal is the caller's
+    // own position and can sit off the mesh, and - the case that matters - it
+    // can be on a surface the route cannot walk to at all, a different floor
+    // reached by an elevator. Whether to append the exact goal depends on why
+    // there is a gap. A small gap at the same level is a genuine final
+    // approach: append it. A gap that is mostly vertical is a level change the
+    // service cannot model; stop at the reachable point and say so, rather than
+    // fabricate a step that walks up through a ceiling.
+    constexpr float kSameLevel = 3.f;
+    const Vec3 end = pts.back();
+    const float gapH = std::sqrt((to.x - end.x) * (to.x - end.x) +
+                                 (to.y - end.y) * (to.y - end.y));
+    const float gapV = to.z - end.z;
+    if (gapH <= kGoalReachTolerance && std::fabs(gapV) <= kSameLevel) {
+        if ((end - backbone.back()).length() > 0.5f) pts.push_back(backbone.back());
+    } else if (gapH <= kGoalReachTolerance && std::fabs(gapV) > kSameLevel) {
+        // Reached the base under (or beside) a goal on another level.
+        out.reachedGoal = false;
+        out.goalGapHoriz = gapH;
+        out.goalGapVert = gapV;
+    } else {
+        // The route did not get near the goal - a genuinely fragmented long
+        // trip. Keep the existing behaviour: the goal anchor closes it out and
+        // the unconfirmed accounting already flags the stretch.
+        if ((end - backbone.back()).length() > 0.5f) pts.push_back(backbone.back());
+        out.reachedGoal = false;
+        out.goalGapHoriz = gapH;
+        out.goalGapVert = gapV;
+    }
 
     out.waypoints = std::move(pts);
     out.success = true;

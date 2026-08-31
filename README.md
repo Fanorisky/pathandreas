@@ -149,7 +149,8 @@ waypoints lead only part of the way (Detour partial result). Treat it as
 {"type":"find_hybrid_path","id":"req-5","from":[x,y,z],"to":[x,y,z]}
 {"type":"find_hybrid_path_result","id":"req-5","success":true,
  "graph":"ped+vehicle","waypoints":[[x,y,z],...],
- "repaired_segments":246,"straight_segments":2}
+ "repaired_segments":246,"straight_segments":2,
+ "reached_goal":true,"goal_gap":[0.0,0.0]}
 ```
 The three backends fail in opposite places, so this combines them rather than
 picking one. The **pedestrian node graph** is dense and complete inside a city
@@ -199,16 +200,24 @@ reach rather than stepping node by node): 150-230 ms across the whole map,
 a few ms inside a city. `"repair": false` skips it and returns the sparse node
 backbone at ~`minSpacing` (25 unit) spacing.
 
-Waypoint 0 and the last are your exact endpoint positions. Semantics
-otherwise: a graph-following route to the node nearest the goal, not exact
-reachability - the final approach into an off-graph goal is the consumer's
-business. Pair with move_along_surface per tick; when a tick stops making
-progress, switch to direct movement + find_ground_z until the next waypoint.
-That was verified end to end before confirmation existed (a simulated
-pedestrian walked Grove Street -> San Fierro, 7,005 units, 2,813 ticks, 0.7%
-recovery ticks, arriving 0.2 units from the goal); with confirmation the same
-route leaves 2 of 248 hops unchecked, so recovery is now a safety net for a
-named handful of stretches rather than for anywhere the mesh happens to break.
+Waypoint 0 is your exact start; the last waypoint is the goal **only when
+`reached_goal` is true**. The goal can sit on a surface the walk cannot reach -
+most often a different floor served by an elevator, which is in neither the
+navmesh nor the node graph. When that happens the route still ends at the best
+reachable point (the ground-floor spot below the target, say), `reached_goal`
+is `false`, and `goal_gap` is `[horizontal, vertical]` from that point to the
+goal: a large vertical with a small horizontal is exactly that lift, and
+crossing it is the consumer's business (the server owner scripts the elevator).
+The route does not fabricate a step up through the ceiling to pretend it
+arrived. Semantics otherwise: a graph-following route to the node nearest the
+goal, not exact reachability. Pair with move_along_surface per tick; when a
+tick stops making progress, switch to direct movement + find_ground_z until the
+next waypoint. That was verified end to end before confirmation existed (a
+simulated pedestrian walked Grove Street -> San Fierro, 7,005 units, 2,813
+ticks, 0.7% recovery ticks, arriving 0.2 units from the goal); with
+confirmation the same route leaves 2 of 248 hops unchecked, so recovery is now
+a safety net for a named handful of stretches rather than for anywhere the mesh
+happens to break.
 
 **vehicle path** (road network)
 ```json

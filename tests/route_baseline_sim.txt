@@ -73,16 +73,16 @@ vehicle/random/1/029	route=ok offroad_start=ok offroad_goal=ok
 vehicle/san-fierro-to-las-venturas	route=ok offroad_start=step offroad_goal=width
 vehicle/santa-maria-beach-start	route=ok offroad_start=step offroad_goal=step
 vehicle/sf-low-clearance-stretch	route=ok offroad_start=width offroad_goal=ok clearance=low
-walk/beach-to-road	route=ok src=ped unverified=none sim=arrived sim_recovery=high
+walk/beach-to-road	route=ok src=ped unverified=none goal=short(v-3) sim=arrived sim_recovery=low
 walk/grove-to-idlewood	route=ok src=ped unverified=none sim=arrived sim_recovery=low
 walk/grove-to-las-venturas	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
 walk/grove-to-pershing-square	route=ok src=ped unverified=none sim=arrived sim_recovery=low
 walk/grove-to-san-fierro	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
-walk/lv-node-detour-vs-mesh	route=ok src=ped unverified=none sim=arrived sim_recovery=low
+walk/lv-node-detour-vs-mesh	route=ok src=ped unverified=none goal=short(v7) sim=arrived sim_recovery=none
 walk/lv-strip-short	route=ok src=ped unverified=low sim=arrived sim_recovery=high
 walk/random/1/000	route=none
 walk/random/1/001	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
-walk/random/1/002	route=ok src=ped unverified=none sim=arrived sim_recovery=none
+walk/random/1/002	route=ok src=ped unverified=none goal=short(v-8) sim=arrived sim_recovery=none
 walk/random/1/003	route=ok src=vehicle unverified=low sim=arrived sim_recovery=low
 walk/random/1/004	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
 walk/random/1/005	route=ok src=vehicle unverified=none sim=arrived sim_recovery=low
@@ -101,7 +101,7 @@ walk/random/1/017	route=ok src=ped+vehicle unverified=low sim=arrived sim_recove
 walk/random/1/018	route=ok src=vehicle unverified=low sim=arrived sim_recovery=low
 walk/random/1/019	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
 walk/random/1/020	route=ok src=ped+vehicle unverified=none sim=arrived sim_recovery=low
-walk/random/1/021	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
+walk/random/1/021	route=ok src=ped+vehicle unverified=low goal=short(v10) sim=arrived sim_recovery=low
 walk/random/1/022	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=high
 walk/random/1/023	route=ok src=vehicle unverified=low unconfirmed_hop=long sim=arrived sim_recovery=low
 walk/random/1/024	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
