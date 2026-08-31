@@ -146,13 +146,19 @@ PathResult Pathfinder::FindPath(const Vec3& startPos, const Vec3& endPos, const 
     // Convert to GTA coords and keep the first point exactly on the snapped start
     // (the poly projection can sit slightly off; the ground-snap above is better).
     out.waypoints.reserve(static_cast<size_t>(nstraight) + 1);
+    out.offMesh.reserve(static_cast<size_t>(nstraight) + 1);
     if (nstraight > 0) {
         Vec3 p0 = toGta(&straight[0]);
         if ((p0 - start).lengthSq() < 900.f) p0 = start;
         out.waypoints.push_back(p0);
+        out.offMesh.push_back((flags[0] & DT_STRAIGHTPATH_OFFMESH_CONNECTION) ? 1 : 0);
     }
-    for (int i = 1; i < nstraight; ++i)
+    for (int i = 1; i < nstraight; ++i) {
         out.waypoints.push_back(toGta(&straight[i * 3]));
+        // Detour sets the flag on the waypoint where the connection STARTS, so
+        // it describes the step leaving that waypoint.
+        out.offMesh.push_back((flags[i] & DT_STRAIGHTPATH_OFFMESH_CONNECTION) ? 1 : 0);
+    }
 
     // Raycast each straight segment. Detour's straight path follows polygon edges,
     // which are walkable by construction, so walls should not be crossed - but
@@ -160,19 +166,29 @@ PathResult Pathfinder::FindPath(const Vec3& startPos, const Vec3& endPos, const 
     // is found, insert the hit point as a waypoint to force the NPC to stop there.
     if (world) {
         std::vector<Vec3> clean;
+        std::vector<uint8_t> cleanFlags;
         clean.reserve(out.waypoints.size() + 2);
+        cleanFlags.reserve(out.waypoints.size() + 2);
         for (size_t i = 0; i < out.waypoints.size(); ++i) {
             const Vec3& a = out.waypoints[i];
+            const uint8_t f = i < out.offMesh.size() ? out.offMesh[i] : 0;
             clean.push_back(a);
+            cleanFlags.push_back(f);
             if (i + 1 < out.waypoints.size()) {
+                // An off-mesh step legitimately passes through geometry - the
+                // riser it climbs over - so raycasting it would always "hit"
+                // and insert a bogus stop point in the middle of the climb.
+                if (f) continue;
                 const Vec3& b = out.waypoints[i + 1];
                 RayHitResult hit;
                 if (world->RayCastLine(a, b, hit) && hit.hit && hit.fraction > 0.05f && hit.fraction < 0.95f) {
                     clean.push_back(hit.point);
+                    cleanFlags.push_back(0);
                 }
             }
         }
         out.waypoints.swap(clean);
+        out.offMesh.swap(cleanFlags);
     }
 
     out.success = true;

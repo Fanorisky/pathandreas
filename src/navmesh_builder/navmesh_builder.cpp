@@ -6,14 +6,18 @@
 #include "Recast.h"
 #include "DetourNavMesh.h"
 #include "DetourNavMeshBuilder.h"
+#include "DetourNavMeshQuery.h"
 
 #include <cmath>
 #include <cstring>
+#include <cstdint>
 #include <vector>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <mutex>
+#include <set>
 
 namespace wqs {
 namespace {
@@ -46,8 +50,17 @@ struct TileResult {
     int dataSize = 0;
 };
 
+// A step bridge to bake into a tile, in Recast (Y-up) world coordinates - the
+// same space the tile vertices live in. start lies inside the tile.
+struct OffMeshLink {
+    float start[3];
+    float end[3];
+    float radius;
+};
+
 TileResult buildTile(rcContext* ctx, const RecastVerts& rv, const NavBuildConfig& in,
-                     const float orig[3], int tx, int ty, float tileWu) {
+                     const float orig[3], int tx, int ty, float tileWu,
+                     const std::vector<OffMeshLink>& links = {}) {
     TileResult result;
     rcConfig cfg;
     std::memset(&cfg, 0, sizeof(cfg));
@@ -264,6 +277,35 @@ TileResult buildTile(rcContext* ctx, const RecastVerts& rv, const NavBuildConfig
     rcVcopy(params.bmin, pmesh->bmin);
     rcVcopy(params.bmax, pmesh->bmax);
 
+    // Off-mesh step bridges for this tile. Detour stores each as two verts
+    // (start, end), a radius, and per-connection area/flags/dir/id; the arrays
+    // must outlive dtCreateNavMeshData, so they are built here on the stack.
+    std::vector<float> conVerts;
+    std::vector<float> conRad;
+    std::vector<unsigned char> conDir, conAreas;
+    std::vector<unsigned short> conFlags;
+    std::vector<unsigned int> conId;
+    if (!links.empty()) {
+        conVerts.reserve(links.size() * 6);
+        for (size_t i = 0; i < links.size(); ++i) {
+            const OffMeshLink& l = links[i];
+            for (int k = 0; k < 3; ++k) conVerts.push_back(l.start[k]);
+            for (int k = 0; k < 3; ++k) conVerts.push_back(l.end[k]);
+            conRad.push_back(l.radius);
+            conDir.push_back(DT_OFFMESH_CON_BIDIR);   // climbable both ways
+            conAreas.push_back(63);                    // same walkable area as polys
+            conFlags.push_back(1);                     // same flag the polys carry
+            conId.push_back(static_cast<unsigned int>(i));
+        }
+        params.offMeshConVerts = conVerts.data();
+        params.offMeshConRad = conRad.data();
+        params.offMeshConDir = conDir.data();
+        params.offMeshConAreas = conAreas.data();
+        params.offMeshConFlags = conFlags.data();
+        params.offMeshConUserID = conId.data();
+        params.offMeshConCount = static_cast<int>(links.size());
+    }
+
     unsigned char* data = nullptr;
     int dataSize = 0;
     if (!dtCreateNavMeshData(&params, &data, &dataSize)) {
@@ -276,6 +318,122 @@ TileResult buildTile(rcContext* ctx, const RecastVerts& rv, const NavBuildConfig
     result.data = data;
     result.dataSize = dataSize;
     return result;
+}
+
+// Label every ground polygon with a connected-component id, flooding across
+// Detour's own links. Off-mesh polys do not exist yet at this point. Two polys
+// in the same component are already reachable on foot; a step link is only
+// worth adding between different ones.
+void labelComponents(const dtNavMesh& nav, std::map<dtPolyRef, int>& comp) {
+    for (int t = 0; t < nav.getMaxTiles(); ++t) {
+        const dtMeshTile* tile = nav.getTile(t);
+        if (!tile || !tile->header) continue;
+        const dtPolyRef base = nav.getPolyRefBase(tile);
+        for (int i = 0; i < tile->header->polyCount; ++i) {
+            if (tile->polys[i].getType() == DT_POLYTYPE_OFFMESH_CONNECTION) continue;
+            comp.emplace(base | static_cast<dtPolyRef>(i), -1);
+        }
+    }
+    int next = 0;
+    std::vector<dtPolyRef> stack;
+    for (auto& kv : comp) {
+        if (kv.second >= 0) continue;
+        const int id = next++;
+        stack.clear();
+        stack.push_back(kv.first);
+        comp[kv.first] = id;
+        while (!stack.empty()) {
+            const dtPolyRef ref = stack.back();
+            stack.pop_back();
+            const dtMeshTile* tile = nullptr;
+            const dtPoly* poly = nullptr;
+            if (dtStatusFailed(nav.getTileAndPolyByRef(ref, &tile, &poly))) continue;
+            for (unsigned k = poly->firstLink; k != DT_NULL_LINK; k = tile->links[k].next) {
+                const dtPolyRef nb = tile->links[k].ref;
+                auto it = comp.find(nb);
+                if (it != comp.end() && it->second < 0) {
+                    it->second = id;
+                    stack.push_back(nb);
+                }
+            }
+        }
+    }
+}
+
+// Find small vertical gaps between navmesh fragments and return a step bridge
+// across each. A border edge (no walkable neighbour) is probed just past its
+// lip; if a poly from a DIFFERENT component sits there within a step's rise, a
+// link is made. Detour connects it both ways at addTile time.
+void detectStepLinks(const dtNavMesh& nav, const NavBuildConfig& cfg,
+                     std::vector<OffMeshLink>& out) {
+    std::map<dtPolyRef, int> comp;
+    labelComponents(nav, comp);
+
+    dtNavMeshQuery query;
+    if (dtStatusFailed(query.init(&nav, 2048))) return;
+    dtQueryFilter filter;
+
+    const float minRise = cfg.agentClimb;      // below this Recast already links it
+    const float maxRise = cfg.stepLinkMaxRise;
+    const float reach = cfg.stepLinkReach;
+    // Dedup: at most one link per rounded (start,end) cell, so a long stair
+    // lip does not spawn a bridge at every edge sample.
+    std::set<uint64_t> seen;
+    auto cellKey = [](const float* s, const float* e) {
+        auto q = [](float v) { return static_cast<int64_t>(std::floor(v / 1.5f)); };
+        uint64_t h = 1469598103934665603ull;
+        for (float v : {s[0], s[2], e[0], e[2]}) { h = (h ^ static_cast<uint64_t>(q(v))) * 1099511628211ull; }
+        return h;
+    };
+
+    for (int t = 0; t < nav.getMaxTiles(); ++t) {
+        const dtMeshTile* tile = nav.getTile(t);
+        if (!tile || !tile->header) continue;
+        const dtPolyRef base = nav.getPolyRefBase(tile);
+        for (int i = 0; i < tile->header->polyCount; ++i) {
+            const dtPoly* poly = &tile->polys[i];
+            if (poly->getType() == DT_POLYTYPE_OFFMESH_CONNECTION) continue;
+            const dtPolyRef ref = base | static_cast<dtPolyRef>(i);
+            const auto ci = comp.find(ref);
+            const int myComp = ci == comp.end() ? -1 : ci->second;
+            // Polygon centroid, to orient edge normals outward.
+            float cen[3] = {0, 0, 0};
+            for (int v = 0; v < poly->vertCount; ++v)
+                for (int k = 0; k < 3; ++k) cen[k] += tile->verts[poly->verts[v] * 3 + k];
+            for (int k = 0; k < 3; ++k) cen[k] /= poly->vertCount;
+            for (int j = 0; j < poly->vertCount; ++j) {
+                if (poly->neis[j] != 0) continue; // has a walkable neighbour here
+                const float* va = &tile->verts[poly->verts[j] * 3];
+                const float* vb = &tile->verts[poly->verts[(j + 1) % poly->vertCount] * 3];
+                float mid[3] = {(va[0] + vb[0]) * 0.5f, (va[1] + vb[1]) * 0.5f,
+                                (va[2] + vb[2]) * 0.5f};
+                // Outward horizontal normal (X,Z); Y is up in Recast.
+                float nx = vb[2] - va[2], nz = -(vb[0] - va[0]);
+                const float nl = std::sqrt(nx * nx + nz * nz);
+                if (nl < 1e-4f) continue;
+                nx /= nl; nz /= nl;
+                if (nx * (mid[0] - cen[0]) + nz * (mid[2] - cen[2]) < 0) { nx = -nx; nz = -nz; }
+                const float probe[3] = {mid[0] + nx * reach, mid[1], mid[2] + nz * reach};
+                const float ext[3] = {reach, maxRise + 1.0f, reach};
+                dtPolyRef found = 0;
+                float pt[3];
+                if (dtStatusFailed(query.findNearestPoly(probe, ext, &filter, &found, pt)) ||
+                    !found || found == ref)
+                    continue;
+                const auto fi = comp.find(found);
+                if (fi == comp.end() || fi->second == myComp) continue; // same fragment
+                const float rise = std::fabs(pt[1] - mid[1]);
+                if (rise < minRise || rise > maxRise) continue;
+                const float dxh = pt[0] - mid[0], dzh = pt[2] - mid[2];
+                if (std::sqrt(dxh * dxh + dzh * dzh) > reach + 0.5f) continue;
+                OffMeshLink l;
+                l.start[0] = mid[0]; l.start[1] = mid[1]; l.start[2] = mid[2];
+                l.end[0] = pt[0];    l.end[1] = pt[1];    l.end[2] = pt[2];
+                l.radius = cfg.stepLinkRadius;
+                if (seen.insert(cellKey(l.start, l.end)).second) out.push_back(l);
+            }
+        }
+    }
 }
 
 } // namespace
@@ -469,6 +627,42 @@ dtNavMesh* BuildTiledNavMesh(const CollisionMesh& mesh, const NavBuildConfig& cf
         err = "no walkable tiles produced";
         dtFreeNavMesh(nav);
         return nullptr;
+    }
+
+    // Second pass: bridge fragments a step apart. Detection runs over the whole
+    // finished navmesh (so it sees cross-tile adjacency and components); each
+    // link is then baked into the tile its start sits in by rebuilding just
+    // that tile. Only the touched tiles are rebuilt, not the whole map.
+    if (cfg.stepLinks) {
+        std::vector<OffMeshLink> links;
+        detectStepLinks(*nav, cfg, links);
+        std::map<std::pair<int, int>, std::vector<OffMeshLink>> byTile;
+        for (const OffMeshLink& l : links) {
+            const int tx = static_cast<int>(std::floor((l.start[0] - bmin[0]) / tw));
+            const int ty = static_cast<int>(std::floor((l.start[2] - bmin[2]) / tw));
+            byTile[{tx, ty}].push_back(l);
+        }
+        int added = 0;
+        for (auto& kv : byTile) {
+            const int tx = kv.first.first, ty = kv.first.second;
+            if (const dtTileRef old = nav->getTileRefAt(tx, ty, 0))
+                nav->removeTile(old, nullptr, nullptr);
+            TileResult tr = buildTile(&ctx, rv, cfg, bmin, tx, ty, tw, kv.second);
+            if (!tr.data) {
+                WQS_WARN("step links: tile %d,%d rebuild produced no data", tx, ty);
+                continue;
+            }
+            const dtStatus st = nav->addTile(tr.data, tr.dataSize, DT_TILE_FREE_DATA, 0, nullptr);
+            if (dtStatusFailed(st)) {
+                dtFree(tr.data);
+                WQS_WARN("step links: re-addTile %d,%d failed (0x%x)", tx, ty, st);
+                continue;
+            }
+            added += static_cast<int>(kv.second.size());
+        }
+        stats.offMeshLinks = added;
+        WQS_INFO("Step links: %zu detected, %d baked into %zu tiles",
+                 links.size(), added, byTile.size());
     }
     return nav;
 }

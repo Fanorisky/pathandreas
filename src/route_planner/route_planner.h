@@ -50,6 +50,11 @@ struct HybridResult {
     bool reachedGoal = true;
     float goalGapHoriz = 0.f;
     float goalGapVert = 0.f;
+    // Indices into waypoints where the step to the NEXT waypoint crosses an
+    // off-mesh connection - a baked step or climb rather than walkable ground.
+    // move_along_surface cannot traverse one, so a controller must move
+    // directly for that step (and can play a climb animation there).
+    std::vector<size_t> climbAt;
 };
 
 // Combines the two backends instead of choosing between them, because they

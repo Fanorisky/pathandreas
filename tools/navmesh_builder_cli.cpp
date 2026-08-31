@@ -16,6 +16,7 @@ static void usage() {
         "  navmesh_builder --out FILE.navmesh [--cadb FILE | --col FILE | --test-city]\n"
         "                  [--tile-size 128] [--cs 0.3] [--ch 0.2] [--threads N]\n"
         "                  [--radius 0.6] [--slope 45] [--agent-height 2.0] [--agent-climb 0.9]\n"
+        "                  [--step-links] [--step-rise 2.0]\n"
         "                  [--region X1,Y1,X2,Y2]  bake only this AABB (GTA coords)\n");
 }
 
@@ -71,6 +72,11 @@ int main(int argc, char** argv) {
         } else if (!std::strcmp(argv[i], "--slope")) {
             std::string v; if (!next(v)) return 2;
             cfg.walkableSlopeAngle = std::strtof(v.c_str(), nullptr);
+        } else if (!std::strcmp(argv[i], "--step-links")) {
+            cfg.stepLinks = true;
+        } else if (!std::strcmp(argv[i], "--step-rise")) {
+            std::string v; if (!next(v)) return 2;
+            cfg.stepLinkMaxRise = std::strtof(v.c_str(), nullptr);
         } else {
             usage();
             return 2;

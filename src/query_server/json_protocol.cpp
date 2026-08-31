@@ -11,6 +11,16 @@ namespace {
 
 json vecArr(const Vec3& v) { return json::array({v.x, v.y, v.z}); }
 
+// Waypoint indices where the step to the next waypoint crosses an off-mesh
+// connection - a baked step or climb. Sent as indices, not a per-waypoint
+// array: a route can carry thousands of waypoints and only a handful of climbs.
+json climbArr(const std::vector<uint8_t>& offMesh) {
+    json a = json::array();
+    for (size_t i = 0; i + 1 < offMesh.size(); ++i)
+        if (offMesh[i]) a.push_back(i);
+    return a;
+}
+
 bool parseVec(const json& j, Vec3& out, std::string& err) {
     if (!j.is_array() || j.size() != 3) {
         err = "expected [x,y,z]";
@@ -151,7 +161,10 @@ std::string HandleQueryJson(const std::string& request,
         for (const auto& v : p.waypoints) wps.push_back(vecArr(v));
         // partial=true: the goal is unreachable; waypoints lead only part of the way.
         return json{{"type", "find_path_result"}, {"id", id}, {"success", p.success},
-                    {"partial", p.partial}, {"waypoints", wps}}.dump();
+                    {"partial", p.partial}, {"waypoints", wps},
+                    // Steps that must be moved through directly:
+                    // move_along_surface cannot cross an off-mesh link.
+                    {"climb_at", climbArr(p.offMesh)}}.dump();
     }
 
     if (type == "move_along_surface") {
@@ -177,7 +190,7 @@ std::string HandleQueryJson(const std::string& request,
         for (const auto& v : p.waypoints) wps.push_back(vecArr(v));
         json resp = {{"type", "find_offroad_path_result"}, {"id", id},
                      {"success", p.success}, {"partial", p.partial},
-                     {"waypoints", wps}};
+                     {"waypoints", wps}, {"climb_at", climbArr(p.offMesh)}};
         if (req.contains("vehicle"))
             resp["vehicle_check"] = vehicleCheck(world, p.waypoints,
                                                  parseVehicle(req["vehicle"]),
@@ -225,7 +238,10 @@ std::string HandleQueryJson(const std::string& request,
                     // from the last waypoint to the requested goal; a large
                     // vertical with a small horizontal is that lift.
                     {"reached_goal", r.reachedGoal},
-                    {"goal_gap", json::array({r.goalGapHoriz, r.goalGapVert})}}.dump();
+                    {"goal_gap", json::array({r.goalGapHoriz, r.goalGapVert})},
+                    // Waypoints whose next step is a baked climb (stairs and
+                    // ledges): move directly there, sliding will stall.
+                    {"climb_at", r.climbAt}}.dump();
     }
 
     if (type == "find_boat_path") {

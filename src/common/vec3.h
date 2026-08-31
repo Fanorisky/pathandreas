@@ -115,6 +115,12 @@ struct PathResult {
     // partial path instead (DT_PARTIAL_RESULT). success=true + partial=true
     // means "walk this far, but the destination is unreachable from here".
     bool partial = false;
+    // Parallel to waypoints: 1 when the step from waypoint i to i+1 crosses an
+    // off-mesh connection - a baked step or climb link, not walkable surface.
+    // move_along_surface cannot traverse one: it slides along polygons and an
+    // off-mesh link is not a polygon, so a controller that only slides will
+    // stall there. Move directly (and play a climb animation) for that step.
+    std::vector<uint8_t> offMesh;
 };
 
 struct CollisionMesh {

@@ -28,6 +28,18 @@ struct NavBuildConfig {
     // 0 = auto (hardware_concurrency, min 2). Tiles are independent, so they
     // build in parallel on this many worker threads.
     unsigned threads = 0;
+
+    // Bridge navmesh fragments that a small vertical step separates, with
+    // Detour off-mesh connections. GTA staircases and platforms often have
+    // risers taller than agentClimb (measured 1.44u on the LV block against a
+    // 0.9u climb), so Recast walls each step off and floors bake disconnected.
+    // A step link reconnects them the way a character actually climbs. Only
+    // gaps between DIFFERENT connected components are bridged, so this targets
+    // genuine fragmentation, not every curb.
+    bool stepLinks = false;
+    float stepLinkMaxRise = 2.0f;   // largest vertical gap treated as a step
+    float stepLinkReach = 1.6f;     // how far horizontally to look across a gap
+    float stepLinkRadius = 0.6f;    // Detour connection radius (agent-sized)
 };
 
 struct NavBuildStats {
@@ -35,6 +47,7 @@ struct NavBuildStats {
     int tilesBuilt = 0;
     int tilesEmpty = 0;
     int totalPolys = 0;
+    int offMeshLinks = 0;
 };
 
 dtNavMesh* BuildTiledNavMesh(const CollisionMesh& mesh, const NavBuildConfig& cfg,

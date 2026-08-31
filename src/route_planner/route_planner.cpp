@@ -201,6 +201,7 @@ HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
         const Vec3& a = backbone[i];
         size_t bestJ = i;                 // i means "nothing reachable beyond the next node"
         std::vector<Vec3> bestLeg;
+        std::vector<uint8_t> bestLegOffMesh;
         float arc = 0.f;                  // corridor arc-length from i to the current probe
         size_t reached = i;               // how far arc has been accumulated
         for (size_t step = 1;; step *= 2) {
@@ -243,12 +244,19 @@ HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
                     ok = true;
                     bestJ = cand;
                     bestLeg = leg.waypoints;
+                    bestLegOffMesh = leg.offMesh;
                 }
             }
             if (!ok || isGoal) break;
         }
         if (bestJ > i) {
             // waypoints[0] is the mesh's snap of `a`, already the last point in pts.
+            // Carry the leg's climb markers across, rebased onto pts. Index k of
+            // the leg lands at pts.size() + k - 1 once the rest is appended.
+            const size_t base = pts.size() - 1;
+            for (size_t k = 0; k + 1 < bestLeg.size(); ++k)
+                if (k < bestLegOffMesh.size() && bestLegOffMesh[k])
+                    out.climbAt.push_back(base + k);
             for (size_t k = 1; k < bestLeg.size(); ++k) pts.push_back(bestLeg[k]);
             out.repairedSegments += static_cast<long>(bestJ - i);
             i = bestJ;

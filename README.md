@@ -88,11 +88,52 @@ Agent defaults (GTA SA ped):
 | agentClimb | 0.9 | SA stair riser |
 | agentRadius | 0.6 | |
 
+### Step links (`--step-links`)
+
+`agentClimb 0.9` is smaller than a lot of San Andreas actually is. Measured on
+the Las Venturas block at `x=1722`, the staircase rises **1.44 units per step**;
+Recast walls every one of those steps off, and the floor above bakes as a
+separate connected component. A route to a target up there stops at the bottom
+of the stairs, and there is nothing wrong with the pathfinder - the bake simply
+never joined the two floors.
+
+Raising `agentClimb` globally would fix it and break other things: a 1.5-unit
+climb allowance lets NPCs walk up every kerb, planter and low wall on the map.
+`--step-links` is the targeted alternative. After the normal bake it labels
+every polygon with a connected-component id, probes each border edge, and where
+a polygon from a **different** component sits within `--step-rise` (default 2.0)
+above and a step's reach across, it writes a bidirectional Detour off-mesh
+connection and rebuilds only the tiles those links land in.
+
+The different-component test is what keeps it honest: edges that are already
+walkable neighbours are left alone, so this bridges genuine fragmentation
+rather than every ledge.
+
+```bash
+./build/navmesh_builder --cadb data/ColAndreas.cadb --out data/gta_steplinks.navmesh \
+    --tile-size 160 --step-links
+```
+
+Full map: 33,743 links across 791 tiles, 268 s, file 132 MB (vs 127 MB). The
+reported Las Venturas 2nd-floor target goes from unreachable (route ended 6.63
+units below it) to reached, climbing `z 12.65 → 14.13 → 16.05 → 18.07 → 19.27`.
+Of the 110 other audit cases, **none changed** - the links fixed the one thing
+they were meant to and disturbed nothing else measured.
+
+Routes crossing a link report it: see `climb_at` in the protocol.
+`move_along_surface` **cannot** traverse an off-mesh connection - it slides
+along polygons and a link is not a polygon - so a controller that only slides
+will stall there until its recovery mode kicks in. Honouring `climb_at`
+instead, a simulated pedestrian walked the whole route in 141 ticks with 3
+direct-move ticks (one per climb) and arrived at z 19.27.
+
 Coordinates: **GTA Z-up** on the wire. Recast is Y-up internally; conversion
 is isolated in `gtaToRecast` / `recastToGta`.
 
 Multi-level geometry (overpass, interiors) is handled by Recast’s stacked
-spans — no per-floor split required for typical SA. Water should be omitted
+spans — no per-floor split required for typical SA, though reaching another
+floor on foot needs `--step-links` above, since the stairs between them are
+taller than the agent climb. Water should be omitted
 from the walkable mesh (don’t place those models, or strip them before bake).
 
 ## Run
@@ -104,7 +145,7 @@ from the walkable mesh (don’t place those models, or strip them before bake).
 
 # Production-shaped
 ./build/pathandreas --cadb scriptfiles/colandreas/ColAndreas.cadb \
-    --navmesh data/sa.navmesh --paths data/paths \
+    --navmesh data/gta_steplinks.navmesh --paths data/paths \
     --navmesh-vehicle data/gta_vehicle.navmesh \
     --bind 0.0.0.0 --port 8090 --threads 4
 ```
@@ -137,8 +178,16 @@ requests on that socket run on a thread pool.
 **path**
 ```json
 {"type":"find_path","id":"req-3","from":[x,y,z],"to":[x,y,z]}
-{"type":"find_path_result","id":"req-3","success":true,"partial":false,"waypoints":[[x,y,z],...]}
+{"type":"find_path_result","id":"req-3","success":true,"partial":false,
+ "waypoints":[[x,y,z],...],"climb_at":[66,111,113]}
 ```
+
+`climb_at` lists waypoint indices whose step to the next waypoint crosses a
+baked off-mesh link - a stair or ledge climb from `--step-links`. Indices, not a
+per-waypoint array, because a route can carry thousands of waypoints and a
+handful of climbs. **Move directly for those steps**: `move_along_surface`
+cannot traverse an off-mesh connection and will stall on one. Everywhere else
+slide as usual. `find_hybrid_path` and `find_offroad_path` report it too.
 
 `partial: true` means the goal is unreachable on the current navmesh and the
 waypoints lead only part of the way (Detour partial result). Treat it as

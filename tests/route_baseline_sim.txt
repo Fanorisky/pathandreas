@@ -78,7 +78,7 @@ walk/grove-to-idlewood	route=ok src=ped unverified=none sim=arrived sim_recovery
 walk/grove-to-las-venturas	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
 walk/grove-to-pershing-square	route=ok src=ped unverified=none sim=arrived sim_recovery=low
 walk/grove-to-san-fierro	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
-walk/lv-node-detour-vs-mesh	route=ok src=ped unverified=none goal=short(v7) sim=arrived sim_recovery=none
+walk/lv-node-detour-vs-mesh	route=ok src=ped unverified=none sim=arrived sim_recovery=low
 walk/lv-strip-short	route=ok src=ped unverified=low sim=arrived sim_recovery=high
 walk/random/1/000	route=none
 walk/random/1/001	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
@@ -109,6 +109,6 @@ walk/random/1/025	route=ok src=vehicle unverified=low unconfirmed_hop=long sim=a
 walk/random/1/026	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
 walk/random/1/027	route=ok src=ped+vehicle unverified=low sim=arrived sim_recovery=low
 walk/random/1/028	route=ok src=ped unverified=none sim=arrived sim_recovery=none
-walk/random/1/029	route=ok src=ped+vehicle unverified=none sim=arrived sim_recovery=none
+walk/random/1/029	route=ok src=ped+vehicle unverified=none sim=arrived sim_recovery=low
 walk/san-fierro-to-las-venturas	route=ok src=ped+vehicle unverified=low unconfirmed_hop=long sim=arrived sim_recovery=high
 walk/sf-downtown-short	route=ok src=ped unverified=none sim=arrived sim_recovery=none
