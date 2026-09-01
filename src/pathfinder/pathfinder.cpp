@@ -81,11 +81,19 @@ Pathfinder::QuerySlot* Pathfinder::threadQuery() const {
     return &slot;
 }
 
-PathResult Pathfinder::FindPath(const Vec3& startPos, const Vec3& endPos, const CollisionWorld* world) const {
+PathResult Pathfinder::FindPath(const Vec3& startPos, const Vec3& endPos,
+                                const CollisionWorld* world, float offroadCost) const {
     PathResult out;
     if (!mesh_) return out;
     QuerySlot* slot = threadQuery();
     if (!slot) return out;
+
+    // Price the corridor for this query. The filter lives in the thread's slot
+    // and is reused, so both areas are set every time rather than once at
+    // init - otherwise a query that asked for a preference would leak it into
+    // the next caller's query on the same thread.
+    slot->filter.setAreaCost(NavArea::kSidewalk, 1.0f);
+    slot->filter.setAreaCost(NavArea::kWalkable, offroadCost > 0.f ? offroadCost : 1.0f);
 
     // Snap start/end Z down to the collision ground before searching the navmesh.
     // Callers often stand a fraction above the surface (feet offset, spawn height),
@@ -193,6 +201,25 @@ PathResult Pathfinder::FindPath(const Vec3& startPos, const Vec3& endPos, const 
 
     out.success = true;
     return out;
+}
+
+unsigned char Pathfinder::AreaAt(const Vec3& pos) const {
+    if (!mesh_) return 0;
+    QuerySlot* slot = threadQuery();
+    if (!slot) return 0;
+    // Neutral costs: this asks what is there, it does not route.
+    slot->filter.setAreaCost(NavArea::kSidewalk, 1.0f);
+    slot->filter.setAreaCost(NavArea::kWalkable, 1.0f);
+    const float p[3] = {pos.x, pos.z, -pos.y};
+    const float ext[3] = {surfaceExtents_.x, surfaceExtents_.z, surfaceExtents_.y};
+    dtPolyRef ref = 0;
+    float nearest[3];
+    if (dtStatusFailed(slot->q->findNearestPoly(p, ext, &slot->filter, &ref, nearest)) || !ref)
+        return 0;
+    const dtMeshTile* tile = nullptr;
+    const dtPoly* poly = nullptr;
+    if (dtStatusFailed(mesh_->getTileAndPolyByRef(ref, &tile, &poly)) || !poly) return 0;
+    return poly->getArea();
 }
 
 Vec3 Pathfinder::MoveAlongSurface(const Vec3& currentPos, const Vec3& desiredMove) const {

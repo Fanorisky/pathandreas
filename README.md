@@ -88,6 +88,64 @@ Agent defaults (GTA SA ped):
 | agentClimb | 0.9 | SA stair riser |
 | agentRadius | 0.6 | |
 
+### Pedestrian corridor (`--paths` + `--sidewalk-radius`)
+
+A navmesh alone answers the wrong question for a pedestrian on a street. Detour
+returns the geometrically shortest walkable line, and that line cuts corners,
+crosses plazas diagonally, walks up the middle of the road and hugs building
+walls. It is optimal as geometry and wrong as behaviour. What makes a route look
+right is not its length but its **structure**, and that structure already exists
+in `nodes.dat` - hand-placed sidewalks and roadsides - and cannot be inferred
+from geometry.
+
+So the nodes go **inside** the search rather than around it. At bake time every
+walkable polygon within `--sidewalk-radius` of a pedestrian node is marked
+`NavArea::kSidewalk`; everything else stays `kWalkable`. At query time
+`dtQueryFilter::setAreaCost` makes the second one dearer, and one ordinary
+Detour query then follows the sidewalk network - because it is cheaper, not
+because a corridor forced it. It stays a preference: a route still leaves the
+corridor to cross a street or reach a goal off the network.
+
+```bash
+./build/navmesh_builder --cadb data/ColAndreas.cadb --paths paths/Paths \
+    --out data/gta_ped.navmesh --tile-size 160 --step-links
+```
+
+Marking happens after erosion (only ground that survived is marked) and before
+region building, so polygons split along the area boundary - a polygon carries
+one area, and a half-sidewalk polygon would make the cost meaningless. That
+split is why the bake grows: 923,745 polygons against 786,058, and 160 MB
+against 132.
+
+**The radius has a measured floor and ceiling.** Pedestrian nodes sit a median
+6.4 units apart (p90 13.2), and a disc per node only forms a *continuous*
+corridor when the radius is at least half the spacing - below ~6.6 it is a
+dotted line. Going wider marks more of the map until the distinction stops
+meaning anything: inside Los Santos radius 5 marks 12.7% of walkable polygons,
+7 marks ~22%, 10 marks 34%. Default **7**, just above the continuity floor.
+Full map: 189,765 of 923,745 polygons marked, 20.5%.
+
+**The cost was measured too**, on a Los Santos block:
+
+| offroad_cost | length | on corridor |
+|---|---|---|
+| 1.0 (neutral) | 309u | 25% |
+| 2.0 | 328u | 89% |
+| 3.0 (default) | 328u | 89% |
+| 6.0 | 332u | 92% |
+| 10.0 | 394u | 95% |
+
+The jump happens between 1.0 and 2.0: faithfulness goes from 25-59% to 88-92%
+for 2-9% more distance. From 2.0 to 6.0 the results are indistinguishable; at
+10.0 the cost only buys length. `offroad_cost` is a per-query field, so one bake
+serves a strolling pedestrian (default 3.0) and a fleeing one (1.0-1.5) without
+rebaking.
+
+Note that **total turning goes up** with faithfulness, 3.75 to 4.61 radians on
+that block. That is not a regression - it is what happens when a route turns at
+corners instead of cutting diagonally. Neither length nor turning can be read as
+"lower is better" for a walking route; `sidewalk_ratio` is the figure that can.
+
 ### Step links (`--step-links`)
 
 `agentClimb 0.9` is smaller than a lot of San Andreas actually is. Measured on
@@ -145,7 +203,7 @@ from the walkable mesh (don’t place those models, or strip them before bake).
 
 # Production-shaped
 ./build/pathandreas --cadb scriptfiles/colandreas/ColAndreas.cadb \
-    --navmesh data/gta_steplinks.navmesh --paths data/paths \
+    --navmesh data/gta_ped.navmesh --paths data/paths \
     --navmesh-vehicle data/gta_vehicle.navmesh \
     --bind 0.0.0.0 --port 8090 --threads 4
 ```
@@ -196,10 +254,12 @@ waypoints lead only part of the way (Detour partial result). Treat it as
 **hybrid path** (walking; all three backends combined)
 ```json
 {"type":"find_hybrid_path","id":"req-5","from":[x,y,z],"to":[x,y,z]}
+{"type":"find_hybrid_path","id":"req-5","from":[x,y,z],"to":[x,y,z],
+ "offroad_cost":3.0}
 {"type":"find_hybrid_path_result","id":"req-5","success":true,
- "graph":"ped+vehicle","waypoints":[[x,y,z],...],
+ "graph":"mesh","waypoints":[[x,y,z],...],"sidewalk_ratio":0.89,
  "repaired_segments":246,"straight_segments":2,
- "reached_goal":true,"goal_gap":[0.0,0.0]}
+ "reached_goal":true,"goal_gap":[0.0,0.0],"climb_at":[66]}
 ```
 The three backends fail in opposite places, so this combines them rather than
 picking one. The **pedestrian node graph** is dense and complete inside a city
@@ -207,9 +267,16 @@ but splits per city; the **road graph** is one connected component but its
 nodes are carriageway centre lines; the **navmesh** reaches anywhere there is
 geometry but only ~20.8% of it is one walkable component.
 
-1. Sidewalks wherever the pedestrian graph reaches. At Grove Street its
-   nearest node is 1.4 units away where the nearest road node is 10.7 units
-   out in the road.
+0. **The navmesh first**, priced by `offroad_cost`. Because the pedestrian
+   corridor is baked into the mesh as area ids, one plain Detour query already
+   follows the sidewalk network - the nodes are inside the search, not a
+   corridor wrapped around it. This answers any trip inside one connected piece
+   of mesh, which is most walking inside a city, and reports `graph: "mesh"`.
+   The stages below exist for what a single mesh query cannot do: the largest
+   walkable component is only ~23% of the map, so a trip between cities is not
+   one query however it is priced.
+1. Sidewalks from the pedestrian node graph. At Grove Street its nearest node
+   is 1.4 units away where the nearest road node is 10.7 units out in the road.
 2. The road graph only for the stretch between the component the start is in
    and the one the goal is in. Handover happens where a sidewalk node is
    actually within 30 units of the corridor, so the route does not "hand over"
@@ -237,8 +304,15 @@ alone:
 | Grove -> San Fierro | 8,129u | 5,868u | - |
 | San Fierro -> Las Venturas | 11,102u | 5,013u | - |
 
-`graph` reports which networks carried it: `"ped"`, `"vehicle"` or
-`"ped+vehicle"`. `straight_segments` is the number of hops the navmesh could
+`graph` reports what carried it: `"mesh"`, `"ped"`, `"vehicle"` or
+`"ped+vehicle"`. `sidewalk_ratio` is the fraction of the route standing on the
+marked corridor (-1 on a mesh baked without one), and it is the quality figure
+to read - **not** length or turning, both of which get worse when a route
+correctly follows streets. Over the 111-case audit corpus, marking the corridor
+moved walking routes from 37 of 37 scoring "low" faithfulness to 13 high, 16
+mid, 8 low, with no route becoming unreachable and all 37 simulated walks still
+arriving. The remaining mid and low scores are mostly inter-city walks, where
+long stretches of countryside have no pedestrian nodes to be faithful to. `straight_segments` is the number of hops the navmesh could
 not confirm - the only number that matters for a controller, since that is
 where recovery mode is still needed - and `longest_unconfirmed` bounds how far
 one such hop runs. Across the map that is 2-7 hops of a few hundred; inside a

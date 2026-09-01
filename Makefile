@@ -80,4 +80,4 @@ $(BUILD)/route_audit: $(OBJS) tools/route_audit.cpp
 # Route regression gate. Needs the local game data, so it is not part of `test`.
 audit: $(BUILD)/route_audit
 	$(BUILD)/route_audit --cadb data/ColAndreas.cadb \
-	    --navmesh data/gta_steplinks.navmesh --paths paths/Paths
+	    --navmesh data/gta_ped.navmesh --paths paths/Paths

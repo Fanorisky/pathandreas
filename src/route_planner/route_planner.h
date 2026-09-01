@@ -26,7 +26,12 @@ struct HybridResult {
     std::vector<Vec3> waypoints; // GTA coords, start to goal
     // Which network carried the route. Stitched means both: sidewalks through
     // each city and the road graph only across the gap between them.
-    enum Source { SourceNone, SourcePed, SourceVehicle, SourceStitched };
+    // SourceMesh: the navmesh carried the whole route on its own. That is not
+    // "the nodes were ignored" - the corridor is baked into the mesh as area
+    // ids, so a mesh route already follows the pedestrian network. It is the
+    // preferred outcome, and the node graphs below are the fallback for where
+    // the mesh is fragmented (between cities, mainly).
+    enum Source { SourceNone, SourceMesh, SourcePed, SourceVehicle, SourceStitched };
     Source source = SourceNone;
     // How the straight hops between backbone waypoints turned out when the
     // navmesh was available to check them. A repaired segment is one the
@@ -55,6 +60,13 @@ struct HybridResult {
     // move_along_surface cannot traverse one, so a controller must move
     // directly for that step (and can play a climb animation there).
     std::vector<size_t> climbAt;
+    // Fraction of sampled waypoints standing on the marked pedestrian corridor,
+    // 0..1, and -1 when nothing could be measured. This is the quality number
+    // for a walking route: length and total turning both get WORSE when a route
+    // correctly follows streets instead of cutting across them, so neither can
+    // be read as "better". Only meaningful on a navmesh baked with
+    // --sidewalk-radius; without one every polygon is the same area.
+    float sidewalkRatio = -1.f;
 };
 
 // Combines the two backends instead of choosing between them, because they
@@ -75,12 +87,20 @@ struct HybridResult {
 //
 // minSpacing is the backbone waypoint spacing in world units (pedestrian pace,
 // not vehicle turn points).
+// offroadCost prices ground outside the marked pedestrian corridor relative to
+// 1.0 inside it, and is what makes a route follow streets rather than cut
+// across them. Measured on a Los Santos block: at 1.0 (neutral) only 25-59% of
+// waypoints land on the corridor; at 2.0 that jumps to 88-92% for 2-9% extra
+// distance, and 3.0 through 6.0 are indistinguishable from each other. Beyond
+// that it only buys length - at 10.0 one route grew 20% for 3 more points of
+// faithfulness. 3.0 sits in the middle of the plateau.
 HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
                                 const RoadNetwork* vehRoads,
                                 const CollisionWorld* world,
                                 const Pathfinder* navmesh,
                                 const Vec3& from, const Vec3& to,
-                                float minSpacing = 25.f);
+                                float minSpacing = 25.f,
+                                float offroadCost = 3.0f);
 
 // Vehicle dimensions in world units; the defaults describe a generic SA
 // sedan. The service uses them to answer "does this route fit", never to

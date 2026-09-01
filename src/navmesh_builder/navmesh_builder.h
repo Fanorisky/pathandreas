@@ -1,11 +1,15 @@
 #pragma once
 
+#include "common/nav_area.h"
 #include "common/vec3.h"
 #include <string>
+#include <vector>
 
 class dtNavMesh;
 
 namespace wqs {
+
+
 
 struct NavBuildConfig {
     // Recast voxel size. GTA SA metres.
@@ -40,6 +44,25 @@ struct NavBuildConfig {
     float stepLinkMaxRise = 2.0f;   // largest vertical gap treated as a step
     float stepLinkReach = 1.6f;     // how far horizontally to look across a gap
     float stepLinkRadius = 0.6f;    // Detour connection radius (agent-sized)
+
+    // Mark walkable ground within this radius of a pedestrian path node as
+    // NavArea::kSidewalk, so a query can make it cheaper than everything else
+    // and routes follow the network the game's own authors laid out instead of
+    // cutting the geometrically shortest line across roads and plazas.
+    //
+    // The radius has a floor and a ceiling that were measured, not guessed.
+    // Pedestrian nodes sit a median 6.4 units apart (p90 13.2), and a disc per
+    // node only forms a CONTINUOUS corridor when the radius is at least half
+    // the spacing - so below ~6.6 the corridor is a dotted line. Going wider
+    // marks more and more of the map until the distinction stops meaning
+    // anything: inside Los Santos, radius 5 marks 12.7% of walkable polygons,
+    // 7 marks ~22%, 10 marks 34%. 7 sits just above the continuity floor while
+    // still leaving roads, plazas and interiors outside the corridor.
+    float sidewalkRadius = 0.f;             // 0 disables the marking entirely
+    float sidewalkHeight = 3.0f;            // vertical extent of each mark
+    // Node positions in GTA coords, not owned. Supplied by the caller because
+    // the builder has no business knowing how path files are parsed.
+    const std::vector<Vec3>* sidewalkNodes = nullptr;
 };
 
 struct NavBuildStats {
@@ -48,6 +71,7 @@ struct NavBuildStats {
     int tilesEmpty = 0;
     int totalPolys = 0;
     int offMeshLinks = 0;
+    int sidewalkPolys = 0;   // polygons carrying NavArea::kSidewalk
 };
 
 dtNavMesh* BuildTiledNavMesh(const CollisionMesh& mesh, const NavBuildConfig& cfg,

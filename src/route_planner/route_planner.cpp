@@ -1,5 +1,6 @@
 #include "route_planner/route_planner.h"
 #include "collision_world/collision_world.h"
+#include "common/nav_area.h"
 #include "pathfinder/pathfinder.h"
 #include "road_network/road_network.h"
 
@@ -83,13 +84,71 @@ std::vector<Vec3> stitchSidewalkLegs(const RoadNetwork& ped,
 
 } // namespace
 
+// Fraction of a route standing on the marked pedestrian corridor. Sampled
+// rather than exhaustive: a long route can carry thousands of waypoints and one
+// findNearestPoly each would cost more than the route did.
+float measureSidewalkRatio(const Pathfinder& navmesh, const std::vector<Vec3>& pts) {
+    constexpr size_t kMaxSamples = 200;
+    if (pts.empty()) return -1.f;
+    const size_t stride = std::max<size_t>(1, pts.size() / kMaxSamples);
+    long on = 0, measured = 0;
+    for (size_t i = 0; i < pts.size(); i += stride) {
+        const unsigned char a = navmesh.AreaAt(pts[i]);
+        if (a == 0) continue;   // nothing under it; not evidence either way
+        ++measured;
+        if (a == NavArea::kSidewalk) ++on;
+    }
+    return measured ? static_cast<float>(on) / static_cast<float>(measured) : -1.f;
+}
+
 HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
                                 const RoadNetwork* vehRoads,
                                 const CollisionWorld* world,
                                 const Pathfinder* navmesh,
                                 const Vec3& from, const Vec3& to,
-                                float minSpacing) {
+                                float minSpacing, float offroadCost) {
     HybridResult out;
+
+    // 0. Ask the navmesh first. With the pedestrian corridor baked in as area
+    //    ids, a plain mesh query already follows the sidewalk network - the
+    //    nodes are inside the search rather than a corridor wrapped around it,
+    //    so there is no second stage to arbitrate against and nothing to
+    //    straighten afterwards. This is the answer for any trip inside one
+    //    connected piece of mesh, which is most walking inside a city.
+    //
+    //    The node graphs below stay for what this cannot do: the mesh's largest
+    //    walkable component is only ~23% of the map, so a trip between cities
+    //    is not one mesh query, however it is priced.
+    if (navmesh && navmesh->ready()) {
+        const PathResult direct = navmesh->FindPath(from, to, world, offroadCost);
+        if (direct.success && direct.waypoints.size() >= 2) {
+            const Vec3& end = direct.waypoints.back();
+            const float gapH = std::sqrt((to.x - end.x) * (to.x - end.x) +
+                                         (to.y - end.y) * (to.y - end.y));
+            const float gapV = to.z - end.z;
+            // Same rule as the corridor path uses for its final approach: a
+            // partial result that lands beside the goal is the route, and a
+            // mostly-vertical remainder is a level change to report, not walk.
+            const bool nearGoal = gapH <= 8.f;
+            if (!direct.partial || nearGoal) {
+                out.waypoints = direct.waypoints;
+                out.source = HybridResult::SourceMesh;
+                out.repairedSegments = static_cast<long>(direct.waypoints.size()) - 1;
+                for (size_t i = 0; i + 1 < direct.offMesh.size(); ++i)
+                    if (direct.offMesh[i]) out.climbAt.push_back(i);
+                if (direct.partial && std::fabs(gapV) > 3.f) {
+                    out.reachedGoal = false;
+                    out.goalGapHoriz = gapH;
+                    out.goalGapVert = gapV;
+                } else if (gapH > 0.5f) {
+                    out.waypoints.push_back(to);
+                }
+                out.sidewalkRatio = measureSidewalkRatio(*navmesh, out.waypoints);
+                out.success = true;
+                return out;
+            }
+        }
+    }
 
     // 1. Sidewalks alone. Inside a city this is the whole answer, and it is
     //    the difference between a pedestrian on the pavement and one walking
@@ -209,7 +268,7 @@ HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
             for (size_t k = reached + 1; k <= cand; ++k)
                 arc += (backbone[k] - backbone[k - 1]).length();
             reached = cand;
-            const PathResult leg = navmesh->FindPath(a, backbone[cand], world);
+            const PathResult leg = navmesh->FindPath(a, backbone[cand], world, offroadCost);
             const bool isGoal = cand == backbone.size() - 1;
             // A leg is normally only trusted when it reaches its target poly
             // (not partial). The one exception is the goal itself: unlike every
@@ -300,6 +359,7 @@ HybridResult ComposeHybridRoute(const RoadNetwork* pedRoads,
     }
 
     out.waypoints = std::move(pts);
+    out.sidewalkRatio = measureSidewalkRatio(*navmesh, out.waypoints);
     out.success = true;
     return out;
 }

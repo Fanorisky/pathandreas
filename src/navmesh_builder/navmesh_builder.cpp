@@ -205,6 +205,28 @@ TileResult buildTile(rcContext* ctx, const RecastVerts& rv, const NavBuildConfig
         rcFreeCompactHeightfield(chf);
         return result;
     }
+
+    // Mark the pedestrian corridor. This has to happen after erosion (so only
+    // ground that survived is marked) and before region building (so regions
+    // and therefore polygons split along the area boundary - a polygon has one
+    // area, and a half-sidewalk polygon would make the cost meaningless).
+    // Nodes are filtered to this tile's expanded box first: the full map has
+    // ~37k of them and marking every one into every tile would be 54M
+    // cylinder passes for no effect outside the tile.
+    if (in.sidewalkRadius > 0.f && in.sidewalkNodes) {
+        const float pad = in.sidewalkRadius + 1.f;
+        for (const Vec3& g : *in.sidewalkNodes) {
+            // GTA Z-up -> Recast Y-up, matching toRecast().
+            const float p[3] = {g.x, g.z, -g.y};
+            if (p[0] < cfg.bmin[0] - pad || p[0] > cfg.bmax[0] + pad) continue;
+            if (p[2] < cfg.bmin[2] - pad || p[2] > cfg.bmax[2] + pad) continue;
+            // The mark spans from a little below the node to sidewalkHeight
+            // above: node heights sit near the surface but not exactly on it.
+            const float base[3] = {p[0], p[1] - 1.0f, p[2]};
+            rcMarkCylinderArea(ctx, base, in.sidewalkRadius,
+                               in.sidewalkHeight + 1.0f, NavArea::kSidewalk, *chf);
+        }
+    }
     if (!rcBuildDistanceField(ctx, *chf)) {
         rcFreeCompactHeightfield(chf);
         return result;
@@ -248,7 +270,9 @@ TileResult buildTile(rcContext* ctx, const RecastVerts& rv, const NavBuildConfig
 
     for (int i = 0; i < pmesh->npolys; ++i) {
         pmesh->flags[i] = 1;
-        if (pmesh->areas[i] == RC_WALKABLE_AREA) pmesh->areas[i] = 63;
+        // RC_WALKABLE_AREA already equals NavArea::kWalkable (63); the marked
+        // pedestrian corridor keeps its own id and must not be flattened here.
+        if (pmesh->areas[i] == RC_WALKABLE_AREA) pmesh->areas[i] = NavArea::kWalkable;
     }
 
     dtNavMeshCreateParams params;
@@ -293,7 +317,7 @@ TileResult buildTile(rcContext* ctx, const RecastVerts& rv, const NavBuildConfig
             for (int k = 0; k < 3; ++k) conVerts.push_back(l.end[k]);
             conRad.push_back(l.radius);
             conDir.push_back(DT_OFFMESH_CON_BIDIR);   // climbable both ways
-            conAreas.push_back(63);                    // same walkable area as polys
+            conAreas.push_back(NavArea::kWalkable);    // same walkable area as polys
             conFlags.push_back(1);                     // same flag the polys carry
             conId.push_back(static_cast<unsigned int>(i));
         }
@@ -621,8 +645,28 @@ dtNavMesh* BuildTiledNavMesh(const CollisionMesh& mesh, const NavBuildConfig& cf
         ++stats.tilesBuilt;
     }
 
+    // Count what the marking actually produced. Doing it from the finished mesh
+    // rather than from the polymesh proves the area survived dtCreateNavMeshData
+    // and addTile, which is the part that matters at query time.
+    {
+        const dtNavMesh* cnav = nav;
+        for (int t = 0; t < cnav->getMaxTiles(); ++t) {
+            const dtMeshTile* tile = cnav->getTile(t);
+            if (!tile || !tile->header) continue;
+            for (int i = 0; i < tile->header->polyCount; ++i) {
+                if (tile->polys[i].getType() == DT_POLYTYPE_OFFMESH_CONNECTION) continue;
+                ++stats.totalPolys;
+                if (tile->polys[i].getArea() == NavArea::kSidewalk) ++stats.sidewalkPolys;
+            }
+        }
+    }
     WQS_INFO("Navmesh built: %d/%d tiles (empty %d)",
              stats.tilesBuilt, stats.tilesAttempted, stats.tilesEmpty);
+    if (cfg.sidewalkRadius > 0.f)
+        WQS_INFO("Pedestrian corridor: %d of %d polys marked (%.1f%%) at radius %.1f",
+                 stats.sidewalkPolys, stats.totalPolys,
+                 stats.totalPolys ? 100.0 * stats.sidewalkPolys / stats.totalPolys : 0.0,
+                 cfg.sidewalkRadius);
     if (stats.tilesBuilt == 0) {
         err = "no walkable tiles produced";
         dtFreeNavMesh(nav);

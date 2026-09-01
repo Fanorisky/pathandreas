@@ -237,6 +237,7 @@ std::string auditWalk(Backends& b, const Case& c, bool simulate) {
 
     const char* src = "?";
     switch (r.source) {
+        case RoutePlanner::HybridResult::SourceMesh: src = "mesh"; break;
         case RoutePlanner::HybridResult::SourcePed: src = "ped"; break;
         case RoutePlanner::HybridResult::SourceVehicle: src = "vehicle"; break;
         case RoutePlanner::HybridResult::SourceStitched: src = "ped+vehicle"; break;
@@ -245,6 +246,15 @@ std::string auditWalk(Backends& b, const Case& c, bool simulate) {
     f.push_back(std::string("src=") + src);
     f.push_back("unverified=" + bucket(r.straightSegments,
                                        r.straightSegments + r.repairedSegments));
+    // Corridor faithfulness is the quality number for a walking route. Length
+    // and total turning both get WORSE when a route correctly follows streets
+    // instead of cutting across them, so neither can stand in for it. Bucketed,
+    // because the exact percentage moves with any cost or radius tweak.
+    if (r.sidewalkRatio >= 0.f) {
+        const int pct = static_cast<int>(r.sidewalkRatio * 100.f);
+        const char* b = pct >= 80 ? "high" : (pct >= 50 ? "mid" : "low");
+        f.push_back(std::string("corridor=") + b);
+    }
 
     if (b.haveWorld && ungrounded(b.world, r.waypoints)) f.push_back("ungrounded=yes");
     // The raw waypoint spacing says nothing here: a long hop inside a confirmed

@@ -1,5 +1,7 @@
 #include "collision_loader/collision_loader.h"
 #include "navmesh_builder/navmesh_builder.h"
+#include "road_network/road_network.h"
+#include "road_network/sa_paths.h"
 #include "common/log.h"
 
 #include <cstring>
@@ -17,6 +19,7 @@ static void usage() {
         "                  [--tile-size 128] [--cs 0.3] [--ch 0.2] [--threads N]\n"
         "                  [--radius 0.6] [--slope 45] [--agent-height 2.0] [--agent-climb 0.9]\n"
         "                  [--step-links] [--step-rise 2.0]\n"
+        "                  [--paths DIR] [--sidewalk-radius 7.0]  mark the ped corridor\n"
         "                  [--region X1,Y1,X2,Y2]  bake only this AABB (GTA coords)\n");
 }
 
@@ -24,6 +27,8 @@ int main(int argc, char** argv) {
     std::string cadb, col, out, region;
     bool testCity = false;
     NavBuildConfig cfg;
+    std::string pathsDir;
+    std::vector<Vec3> sidewalkNodes;
     LoaderOptions loadOpt;
 
     for (int i = 1; i < argc; ++i) {
@@ -72,6 +77,11 @@ int main(int argc, char** argv) {
         } else if (!std::strcmp(argv[i], "--slope")) {
             std::string v; if (!next(v)) return 2;
             cfg.walkableSlopeAngle = std::strtof(v.c_str(), nullptr);
+        } else if (!std::strcmp(argv[i], "--paths")) {
+            if (!next(pathsDir)) return 2;
+        } else if (!std::strcmp(argv[i], "--sidewalk-radius")) {
+            std::string v; if (!next(v)) return 2;
+            cfg.sidewalkRadius = std::strtof(v.c_str(), nullptr);
         } else if (!std::strcmp(argv[i], "--step-links")) {
             cfg.stepLinks = true;
         } else if (!std::strcmp(argv[i], "--step-rise")) {
@@ -83,6 +93,28 @@ int main(int argc, char** argv) {
         }
     }
     if (out.empty()) { usage(); return 2; }
+
+    // The pedestrian corridor is marked from the game's own ped path nodes, so
+    // the bake needs them. Default the radius when --paths is given without one:
+    // 7 sits just above the measured continuity floor (see NavBuildConfig).
+    if (!pathsDir.empty()) {
+        RoadNetwork veh, ped;
+        SaPathsStats st;
+        std::string perr;
+        if (!LoadSaPaths(pathsDir, veh, ped, st, perr)) {
+            WQS_ERROR("SA paths: %s", perr.c_str());
+            return 1;
+        }
+        sidewalkNodes.reserve(static_cast<size_t>(ped.nodeCount()));
+        for (long i = 0; i < ped.nodeCount(); ++i) sidewalkNodes.push_back(ped.nodePos(i));
+        cfg.sidewalkNodes = &sidewalkNodes;
+        if (cfg.sidewalkRadius <= 0.f) cfg.sidewalkRadius = 7.0f;
+        WQS_INFO("Pedestrian corridor from %zu ped nodes, radius %.1f",
+                 sidewalkNodes.size(), cfg.sidewalkRadius);
+    } else if (cfg.sidewalkRadius > 0.f) {
+        WQS_ERROR("--sidewalk-radius needs --paths to know where the nodes are");
+        return 2;
+    }
 
     CollisionMesh mesh;
     if (testCity) mesh = MakeTestCityMesh();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/nav_area.h"
 #include "common/vec3.h"
 #include <memory>
 #include <string>
@@ -23,8 +24,22 @@ public:
     bool ready() const;
 
     // GTA SA coordinates (Z-up). Internally converted to Recast Y-up.
-    PathResult FindPath(const Vec3& startPos, const Vec3& endPos, const CollisionWorld* world = nullptr) const;
+    //
+    // offroadCost prices ground OUTSIDE the marked pedestrian corridor,
+    // relative to 1.0 inside it. 1.0 is neutral (shortest walkable line, which
+    // cuts across roads and plazas); above 1.0 makes the route follow the
+    // corridor and leave it only where that genuinely pays. Has no effect on a
+    // navmesh baked without --sidewalk-radius, where every polygon is the same
+    // area.
+    PathResult FindPath(const Vec3& startPos, const Vec3& endPos,
+                        const CollisionWorld* world = nullptr,
+                        float offroadCost = 1.0f) const;
     Vec3 MoveAlongSurface(const Vec3& currentPos, const Vec3& desiredMove) const;
+
+    // Area id of the polygon nearest a position, or 0 when there is none.
+    // Lets a caller ask "is this spot on the pedestrian corridor?" - which is
+    // how corridor faithfulness gets measured instead of guessed.
+    unsigned char AreaAt(const Vec3& pos) const;
 
     // Search box half-extents in GTA space (x,y,z). z is vertical.
     void setExtents(const Vec3& halfExtents) { pathExtents_ = halfExtents; }

@@ -211,12 +211,18 @@ std::string HandleQueryJson(const std::string& request,
         // "repair": false skips asking the navmesh to confirm each hop, for a
         // caller that would rather have the answer sooner than validated.
         const Pathfinder* mesh = req.value("repair", true) ? pathfinder : nullptr;
-        RoutePlanner::HybridResult r =
-            RoutePlanner::ComposeHybridRoute(pedRoads, roads, world, mesh, from, to);
+        // offroad_cost prices ground outside the pedestrian corridor. 1.0 is
+        // neutral (shortest walkable line, cuts across roads); the default 3.0
+        // follows the sidewalk network. A fleeing NPC wants a low value, a
+        // strolling one the default - one bake serves both.
+        const float offroadCost = req.value("offroad_cost", 3.0f);
+        RoutePlanner::HybridResult r = RoutePlanner::ComposeHybridRoute(
+            pedRoads, roads, world, mesh, from, to, 25.f, offroadCost);
         json wps = json::array();
         for (const auto& v : r.waypoints) wps.push_back(vecArr(v));
         const char* src = "none";
         switch (r.source) {
+            case RoutePlanner::HybridResult::SourceMesh: src = "mesh"; break;
             case RoutePlanner::HybridResult::SourcePed: src = "ped"; break;
             case RoutePlanner::HybridResult::SourceVehicle: src = "vehicle"; break;
             case RoutePlanner::HybridResult::SourceStitched: src = "ped+vehicle"; break;
@@ -241,7 +247,13 @@ std::string HandleQueryJson(const std::string& request,
                     {"goal_gap", json::array({r.goalGapHoriz, r.goalGapVert})},
                     // Waypoints whose next step is a baked climb (stairs and
                     // ledges): move directly there, sliding will stall.
-                    {"climb_at", r.climbAt}}.dump();
+                    {"climb_at", r.climbAt},
+                    // Fraction of the route standing on the marked pedestrian
+                    // corridor, -1 when the navmesh carries no corridor. This
+                    // is the quality figure for a walking route: length and
+                    // turning both get worse when a route correctly follows
+                    // streets instead of cutting across them.
+                    {"sidewalk_ratio", r.sidewalkRatio}}.dump();
     }
 
     if (type == "find_boat_path") {
