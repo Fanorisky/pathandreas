@@ -1,5 +1,7 @@
 #include "query_server/json_protocol.h"
 #include "nlohmann/json.hpp"
+
+#include <unordered_map>
 #include "road_network/road_network.h"
 #include "route_planner/route_planner.h"
 #include "world_manager/world_manager.h"
@@ -10,6 +12,21 @@ namespace wqs {
 namespace {
 
 json vecArr(const Vec3& v) { return json::array({v.x, v.y, v.z}); }
+
+// Per-waypoint corridor membership as one character each: '1' on the marked
+// pedestrian corridor, '0' off it, '?' where nothing was under the point. A
+// string rather than an array of numbers because a route can carry thousands of
+// waypoints and this is only ever read by a viewer drawing them. Costs a
+// nearest-poly query per waypoint, so it is opt-in.
+std::string corridorMask(const Pathfinder& mesh, const std::vector<Vec3>& pts) {
+    std::string m;
+    m.reserve(pts.size());
+    for (const Vec3& p : pts) {
+        const unsigned char a = mesh.AreaAt(p);
+        m.push_back(a == 0 ? '?' : (a == NavArea::kSidewalk ? '1' : '0'));
+    }
+    return m;
+}
 
 // Waypoint indices where the step to the next waypoint crosses an off-mesh
 // connection - a baked step or climb. Sent as indices, not a per-waypoint
@@ -156,15 +173,19 @@ std::string HandleQueryJson(const std::string& request,
         // Pass the collision world so FindPath can ground-snap the endpoints and
         // raycast-validate each segment. When it is absent (navmesh-only build) the
         // pathfinder runs without those extra checks.
-        PathResult p = pathfinder->FindPath(from, to, world);
+        PathResult p = pathfinder->FindPath(from, to, world,
+                                            req.value("offroad_cost", 3.0f));
         json wps = json::array();
         for (const auto& v : p.waypoints) wps.push_back(vecArr(v));
         // partial=true: the goal is unreachable; waypoints lead only part of the way.
-        return json{{"type", "find_path_result"}, {"id", id}, {"success", p.success},
-                    {"partial", p.partial}, {"waypoints", wps},
-                    // Steps that must be moved through directly:
-                    // move_along_surface cannot cross an off-mesh link.
-                    {"climb_at", climbArr(p.offMesh)}}.dump();
+        json resp = {{"type", "find_path_result"}, {"id", id}, {"success", p.success},
+                     {"partial", p.partial}, {"waypoints", wps},
+                     // Steps that must be moved through directly:
+                     // move_along_surface cannot cross an off-mesh link.
+                     {"climb_at", climbArr(p.offMesh)}};
+        if (req.value("include_corridor", false))
+            resp["corridor_mask"] = corridorMask(*pathfinder, p.waypoints);
+        return resp.dump();
     }
 
     if (type == "move_along_surface") {
@@ -228,7 +249,7 @@ std::string HandleQueryJson(const std::string& request,
             case RoutePlanner::HybridResult::SourceStitched: src = "ped+vehicle"; break;
             default: break;
         }
-        return json{{"type", "find_hybrid_path_result"}, {"id", id},
+        json hresp = {{"type", "find_hybrid_path_result"}, {"id", id},
                     {"success", r.success}, {"waypoints", wps},
                     {"graph", src},
                     // How much of the route the navmesh confirmed as walkable.
@@ -253,7 +274,10 @@ std::string HandleQueryJson(const std::string& request,
                     // is the quality figure for a walking route: length and
                     // turning both get worse when a route correctly follows
                     // streets instead of cutting across them.
-                    {"sidewalk_ratio", r.sidewalkRatio}}.dump();
+                    {"sidewalk_ratio", r.sidewalkRatio}};
+        if (req.value("include_corridor", false) && mesh)
+            hresp["corridor_mask"] = corridorMask(*mesh, r.waypoints);
+        return hresp.dump();
     }
 
     if (type == "find_boat_path") {
@@ -369,6 +393,55 @@ std::string HandleQueryJson(const std::string& request,
                 world, pts, veh, vehicleAgent,
                 vehiclePathfinder && vehiclePathfinder->ready());
         return resp.dump();
+    }
+
+    if (type == "nodes_in_rect") {
+        // Bulk node fetch for a viewport, so a viewer can draw the network the
+        // routes actually follow. Capped: the full state is 68k nodes and a
+        // viewer redrawing on every pan does not want them all.
+        const std::string which = req.value("graph", "vehicle");
+        if (which != "ped" && which != "vehicle")
+            return errorResp(id, "graph must be \"vehicle\" or \"ped\"").dump();
+        const RoadNetwork* g = (which == "ped") ? pedRoads : roads;
+        if (!g || !g->ready())
+            return errorResp(id, which + " node graph not loaded").dump();
+        Vec3 lo, hi;
+        if (!req.contains("min") || !req.contains("max"))
+            return errorResp(id, "min and max required as [x,y,z]").dump();
+        if (!parseVec(req["min"], lo, err) || !parseVec(req["max"], hi, err))
+            return errorResp(id, err).dump();
+        const long limit = std::min<long>(req.value("limit", 4000), 20000);
+        std::vector<long> idx;
+        const bool truncated = g->nodesInRect(std::min(lo.x, hi.x), std::min(lo.y, hi.y),
+                                              std::max(lo.x, hi.x), std::max(lo.y, hi.y),
+                                              limit, idx);
+        // Position plus the class bits a viewer colours by. Flags are only
+        // meaningful on vehicle nodes; a ped node reuses those bits.
+        json nodes = json::array();
+        std::unordered_map<long, int> local;
+        local.reserve(idx.size() * 2);
+        for (size_t i = 0; i < idx.size(); ++i) {
+            const long n = idx[i];
+            local[n] = static_cast<int>(i);
+            const Vec3 p = g->nodePos(n);
+            const RoadNodeInfo& info = g->nodeInfo(n);
+            nodes.push_back(json::array({n, p.x, p.y, p.z, info.flags, info.type}));
+        }
+        // Edges as index pairs into `nodes`, so the viewer draws the graph as
+        // lines rather than a dot cloud. Only edges with both ends inside the
+        // rectangle are sent; the ones leaving it would need nodes not present.
+        json edges = json::array();
+        for (const long n : idx) {
+            const auto a = local.find(n);
+            for (long k = 0; k < g->degree(n); ++k) {
+                const auto b = local.find(g->neighbour(n, k));
+                if (b == local.end()) continue;
+                if (a->second > b->second) continue;   // one entry per pair
+                edges.push_back(json::array({a->second, b->second, g->neighbourLanes(n, k)}));
+            }
+        }
+        return json{{"type", "nodes_in_rect_result"}, {"id", id}, {"graph", which},
+                    {"truncated", truncated}, {"nodes", nodes}, {"edges", edges}}.dump();
     }
 
     if (type == "nearest_node") {

@@ -192,6 +192,29 @@ float RoadNetwork::costMul(const Node& n, const RouteProfile& p) const {
     return (n.info.flags & SaFlags::kHighway) ? p.highwayCost : 1.0f;
 }
 
+bool RoadNetwork::nodesInRect(float minX, float minY, float maxX, float maxY,
+                             long limit, std::vector<long>& out) const {
+    out.clear();
+    if (nodes_.empty() || limit <= 0) return false;
+    const int cx0 = static_cast<int>(std::floor(minX / kCell));
+    const int cx1 = static_cast<int>(std::floor(maxX / kCell));
+    const int cy0 = static_cast<int>(std::floor(minY / kCell));
+    const int cy1 = static_cast<int>(std::floor(maxY / kCell));
+    for (int cx = cx0; cx <= cx1; ++cx) {
+        for (int cy = cy0; cy <= cy1; ++cy) {
+            const auto it = grid_.find(cellKey(cx, cy));
+            if (it == grid_.end()) continue;
+            for (const int idx : it->second) {
+                const Vec3& p = nodes_[static_cast<size_t>(idx)].pos;
+                if (p.x < minX || p.x > maxX || p.y < minY || p.y > maxY) continue;
+                if (static_cast<long>(out.size()) >= limit) return true;
+                out.push_back(idx);
+            }
+        }
+    }
+    return false;
+}
+
 long RoadNetwork::nearestNode(const Vec3& pos, const RouteProfile& profile) const {
     if (nodes_.empty()) return -1;
     const int cx = static_cast<int>(std::floor(pos.x / kCell));

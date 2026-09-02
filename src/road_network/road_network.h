@@ -94,6 +94,26 @@ public:
         return nodes_[static_cast<size_t>(index)].info;
     }
 
+    // Read-only adjacency, for drawing the graph and for diagnostics. Edges are
+    // directed: a one-way street appears from one end only, with lanes 0 on the
+    // side that may not be driven.
+    long degree(long node) const {
+        return static_cast<long>(nodes_[static_cast<size_t>(node)].adj.size());
+    }
+    long neighbour(long node, long k) const {
+        return nodes_[static_cast<size_t>(node)].adj[static_cast<size_t>(k)].to;
+    }
+    uint8_t neighbourLanes(long node, long k) const {
+        return nodes_[static_cast<size_t>(node)].adj[static_cast<size_t>(k)].lanes;
+    }
+
+    // Node indices whose position falls inside an XY rectangle, capped at
+    // `limit` (the caller is drawing a viewport, not the whole state). Uses the
+    // same grid as nearestNode, so it costs the overlapped cells, not a scan.
+    // Returns true when the cap cut the result short.
+    bool nodesInRect(float minX, float minY, float maxX, float maxY, long limit,
+                     std::vector<long>& out) const;
+
     // Nearest node the profile accepts, -1 if there is none. Grid-hashed,
     // with a linear fallback for positions far from any node.
     long nearestNode(const Vec3& pos, const RouteProfile& profile = {}) const;

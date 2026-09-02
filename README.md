@@ -38,6 +38,7 @@ pathandreas/
 │   ├── pathfinder/           # Fase 4 — Detour findPath / moveAlongSurface
 │   ├── query_server/         # Fase 5 — WebSocket + HTTP JSON
 │   └── main.cpp
+├── web/                       # standalone live viewer (open index.html)
 ├── tools/navmesh_builder_cli.cpp
 ├── tests/test_all.cpp
 └── third_party/              # Recast+Detour, nlohmann/json
@@ -577,6 +578,53 @@ available; the file format only, the loader here is original.
 
 Routing costs: a cross-city vehicle route is ~1.5 ms on the SA graph
 (LS -> San Fierro, 7,207 units), an intra-city pedestrian route ~0.5 ms.
+
+## Live viewer
+
+`web/index.html` is a standalone page - no build step, no server component,
+nothing to install. Open it from disk and it connects to a running service over
+the WebSocket protocol, so what it draws is the JSON a consumer would receive,
+not a re-implementation of the routing.
+
+```bash
+./build/pathandreas --cadb data/ColAndreas.cadb --navmesh data/gta_ped.navmesh \
+    --paths paths/Paths --port 8090
+xdg-open web/index.html      # or just open the file in a browser
+```
+
+Left-click sets FROM, right-click sets TO, and the route runs immediately. A
+clicked point has no height, so the viewer asks the service for
+`find_ground_z` under it - the coordinate you get is a real world position, not
+a guess.
+
+**The node graphs are the map.** No game image is used as a backdrop and none
+could be shipped: 30,587 road nodes are the road network and 37,650 pedestrian
+nodes are the sidewalks, all of it computed by the service. They are fetched per
+viewport through `nodes_in_rect` because sending 68k nodes on every pan would be
+absurd.
+
+The point of the viewer is not to show *where* a route goes but **why it looks
+the way it does**, so segments are drawn individually rather than as one line:
+
+| drawn as | means |
+|---|---|
+| green | on the marked pedestrian corridor |
+| amber | off the corridor - crossing a road, reaching an off-network goal |
+| red dashed | an unverified hop, where a controller still needs recovery mode |
+| purple dot | a climb (`climb_at`), where `move_along_surface` would stall |
+| red cross | the walk stopped short of a goal on another level |
+
+The side panel carries the numbers that matter - `graph`, `sidewalk_ratio`,
+unverified hops, `longest_unconfirmed`, `reached_goal` with its gap, query time -
+and the **offroad_cost slider re-runs the query live**, so the difference between
+a route that cuts across a plaza and one that follows the pavement is one drag.
+
+Two protocol additions serve it, both useful on their own: `nodes_in_rect`
+(bulk node fetch for a rectangle, capped, reporting `truncated`) and
+`include_corridor: true` on `find_path` / `find_hybrid_path`, which returns
+`corridor_mask` - one character per waypoint, `1` on the corridor, `0` off it,
+`?` where nothing was underneath. A string rather than an array because a route
+can carry thousands of waypoints.
 
 ## Route audit
 
